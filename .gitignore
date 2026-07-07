@@ -1,0 +1,30 @@
+# 환경변수 — 시크릿 절대 커밋 금지 (INV-4)
+.env
+.env.*
+!.env.example
+
+# 의존성
+node_modules/
+
+# Next.js 빌드 산출물
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+
+# 배포
+.vercel/
+
+# 로그
+*.log
+npm-debug.log*
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# 테스트 커버리지
+coverage/
