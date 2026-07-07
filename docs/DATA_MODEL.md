@@ -9,7 +9,7 @@
 - 모든 테이블에 `created_at timestamptz not null default now()`. 갱신되는 테이블에는 `updated_at timestamptz` + 트리거.
 - enum은 Postgres `enum` 타입 대신 `text + check` 제약을 사용한다 (마이그레이션 유연성).
 - **RLS는 모든 테이블에서 활성화**한다. 정책이 없는 테이블은 곧 접근 불가를 의미한다.
-- 승인된 사용자 판별 헬퍼: `is_approved()` — `profiles.status = 'approved'`인 본인 여부. 관리자 판별: `is_admin()`. (SECURITY DEFINER 함수로 구현, 세션 2에서 작성)
+- 승인된 사용자 판별 헬퍼: `is_approved()` — `profiles.status = 'approved'`인 본인 여부. 관리자 판별: `is_admin()`. (SECURITY DEFINER 함수, 세션 1 마이그레이션 0001에서 작성됨 — DECISIONS 2026-07-07)
 - 프로젝트 소유 판별 헬퍼: `owns_project(project_id)` — `projects.owner_id = auth.uid()`.
 
 ## 관계 개요

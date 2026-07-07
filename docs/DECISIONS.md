@@ -16,3 +16,11 @@
 - 2026-07-07 / evaluations·student_scores·records(generated)·audit_logs의 쓰기는 service role 전용, 클라이언트 RLS로는 select만 허용 / 채점·등급·생성 결과를 클라이언트가 위조할 수 없어야 INV-3·INV-6과 감사 무결성이 성립하므로.
 - 2026-07-07 / enum은 Postgres enum 타입 대신 text+check 제약 사용 / enum 타입은 값 추가·삭제 마이그레이션이 번거로워 초기 개발 단계에 부적합.
 - 2026-07-07 / `[확인 필요]` 4건 확정: 합성 점수 기본값 평균, 동점자 상위 등급 부여, 글자수 제한 500자, 원본 자동 삭제 끄기 / 사용자가 제안값 그대로 승인. SPEC·DATA_MODEL에서 `[확인 필요]` 표시 제거.
+- 2026-07-07 / 세션 구획 재편: 세션 1 = 스캐폴드+인증+가입 승인(마이그레이션은 profiles·app_settings만), 세션 2 = 관리자 패널 UI, 잔여 테이블은 해당 도메인 세션에서 마이그레이션 / 사용자 세션 지시에 따름. SPEC과 충돌 없음.
+- 2026-07-07 / is_admin()·is_approved() 헬퍼를 세션 1에서 작성 (DATA_MODEL 원계획은 세션 2) / 세션 1의 RLS 정책(admin 전용 쓰기)에 즉시 필요하고, SECURITY DEFINER로 profiles 정책 재귀를 피해야 하므로.
+- 2026-07-07 / 최초 관리자 지정 = 환경변수 ADMIN_EMAIL + OAuth 콜백에서 service role로 멱등 승격(role='admin', status='approved') / DB 트리거는 환경변수를 읽을 수 없고, 시드 SQL은 auth.users 생성 전에 실행 불가. 콜백 방식이 멱등·자동이므로.
+- 2026-07-07 / 미들웨어 파일명을 proxy.ts로 채택 / Next.js 16이 middleware.ts를 proxy.ts로 개명(둘 다 동작). 신규 프로젝트이므로 현행 규약을 따름. 동작은 SPEC 2절 "미들웨어에서 강제" 그대로.
+- 2026-07-07 / profiles에 클라이언트 insert 정책을 두지 않고 타입에서도 Insert: never / 프로필 생성 경로를 auth 트리거(handle_new_user) 하나로 한정해 위조 가입을 구조적으로 차단.
+- 2026-07-07 / DB 행 타입은 interface가 아닌 type 별칭으로 선언 / postgrest-js의 Record<string, unknown> 제약은 암시적 인덱스 시그니처가 필요한데 interface는 이를 만족하지 못해 전 결과가 never로 추론되는 문제 확인.
+- 2026-07-07 / 마이그레이션 적용은 supabase CLI `db push --db-url` 방식(연결 문자열은 .env.local의 SUPABASE_DB_URL, 커밋 금지) / psql 미설치 환경이고, CLI가 supabase_migrations 이력 테이블로 세션 간 증분 적용을 관리해 주므로. DB 검증용으로 pg를 devDependency에 추가.
+- 2026-07-07 / 제공된 Supabase 프로젝트에 있던 이전 앱 테이블 4종(checkpoints, factsheets, projects, users) drop / 세션 4의 projects 테이블과 이름 충돌. 사용자가 "기존 테이블 삭제"를 명시 선택함.

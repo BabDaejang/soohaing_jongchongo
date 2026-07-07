@@ -28,3 +28,6 @@ Thumbs.db
 
 # 테스트 커버리지
 coverage/
+
+# Supabase CLI 임시 파일
+supabase/.temp/

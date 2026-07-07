@@ -22,22 +22,35 @@
 
 ---
 
-## 세션 1 — (예정) 스캐폴딩·DB 기반
+## 세션 1 — 2026-07-07 (스캐폴드 + 인증 + 가입 승인) ✅ 완료
 
-- [ ] Next.js(App Router, TS strict) + Tailwind 프로젝트 생성, `.env.example` 작성
-- [ ] Supabase 클라이언트 헬퍼(`lib/supabase/`) — 브라우저/서버 분리
-- [ ] DATA_MODEL 기반 초기 마이그레이션: 전 테이블 + RLS 활성화 + 헬퍼 함수(is_admin/is_approved/owns_project)
-- [ ] providers 시드 3종, app_settings.waiting_message 시드
-- [ ] **수용 기준**: typecheck·build 통과, 마이그레이션이 로컬/원격에 적용됨, RLS가 전 테이블에서 활성
+> 구획 재편(DECISIONS 2026-07-07): 인증·승인 워크플로를 세션 1로 앞당기고, 마이그레이션은 profiles·app_settings만. 관리자 패널 UI는 세션 2로.
 
-## 세션 2 — (예정) 인증·가입 승인
+- [x] Next.js 16(App Router, TS strict) + Tailwind v4 프로젝트 생성, `.env.example` 작성, `typecheck` 스크립트 추가
+- [x] Supabase 클라이언트 헬퍼(`lib/supabase/`) — client/server/admin(service role, server-only) 분리 + 수동 Database 타입
+- [x] 마이그레이션 `0001_auth_foundation.sql`: profiles(가입 트리거 → pending 자동 생성), app_settings(+waiting_message 시드), is_admin/is_approved, RLS — 원격 적용·검증 완료 (`supabase db push --db-url`)
+- [x] Google OAuth 로그인 (기본 스코프 email·profile만), `/auth/callback`(+ADMIN_EMAIL 멱등 승격), `/auth/signout`
+- [x] `/login`·`/waiting`(waiting_message 렌더링)·`/`(자리표시자) 페이지
+- [x] proxy.ts(Next 16의 middleware 규약): 비로그인→/login, pending·rejected→/waiting만, /admin은 admin만
+- [x] 최초 관리자: `ADMIN_EMAIL=sorang84@gmail.com` 실계정 로그인으로 admin·approved 승격 확인
+- [x] **수용 기준 검증**: AC1(실로그인 pending 생성 + 테스트 사용자로 /waiting 강제 확인), AC2(approved 변경 후 정상 진입), AC3(본인 행만 조회·app_settings 변조 차단·비인증 전면 차단), AC4(.env* gitignore, 커밋 내 시크릿 없음), typecheck·lint·build 통과
+- 특이사항: 제공된 Supabase 프로젝트에 이전 앱 테이블 4종 존재 → 사용자 승인 후 drop (DECISIONS 참조)
 
-- [ ] Google OAuth 로그인 (Supabase Auth, 기본 스코프 email·profile만)
-- [ ] 최초 로그인 시 profiles `status='pending'` 자동 생성 (트리거)
-- [ ] 미승인 사용자 대기 화면 (waiting_message 표시) + 관리자의 안내문 편집
-- [ ] 관리자 화면: 사용자 승인/거부/삭제
-- [ ] 미들웨어: 승인된 사용자만 앱 기능 접근
-- [ ] **수용 기준**: pending 사용자는 대기 화면 외 접근 불가(미들웨어+RLS 이중 확인), admin 최초 1인 시드됨
+### 다음 세션(2) 인계
+
+- 관리자 패널 UI(사용자 승인/거부/삭제, waiting_message 편집)가 세션 2 본체. `/admin` 라우트 규칙은 proxy.ts에 이미 존재.
+- rejected 사용자도 현재 /waiting과 동일 화면 — 별도 문구가 필요하면 세션 2에서 결정.
+- 마이그레이션 이력은 supabase CLI(supabase_migrations)로 관리 중. 새 마이그레이션은 `supabase/migrations/`에 추가 후 `db push --db-url "$SUPABASE_DB_URL"`.
+- DB 검증 스크립트는 devDependency `pg` 활용 (스크래치에서 실행, 저장소에 없음).
+
+---
+
+## 세션 2 — (예정) 관리자 패널
+
+- [ ] 관리자 화면: 사용자 목록·승인/거부/삭제 (profiles admin RLS 활용)
+- [ ] waiting_message 편집 UI (app_settings admin 쓰기)
+- [ ] rejected 사용자 안내 문구 정책 결정
+- [ ] **수용 기준**: admin이 아닌 계정은 /admin 접근·조작 불가(미들웨어+RLS 이중 확인), 승인/거부가 즉시 대기 화면에 반영
 
 ## 세션 3 — (예정) API 키 체계·모델 라우팅
 
