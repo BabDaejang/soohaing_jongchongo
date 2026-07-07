@@ -15,3 +15,4 @@
 - 2026-07-07 / submissions.student_id를 NULL 허용으로 설계, NULL이면 평가·생성 컨텍스트에서 무조건 제외 / 매칭 확정 전 제출물을 잘못된 학생에 귀속시키지 않기 위한 보수적 설계(혼입 방지). match_status enum(auto_matched/pending_confirm/confirmed/update_pending)과 pending_content로 자동 덮어쓰기 금지를 구조화.
 - 2026-07-07 / evaluations·student_scores·records(generated)·audit_logs의 쓰기는 service role 전용, 클라이언트 RLS로는 select만 허용 / 채점·등급·생성 결과를 클라이언트가 위조할 수 없어야 INV-3·INV-6과 감사 무결성이 성립하므로.
 - 2026-07-07 / enum은 Postgres enum 타입 대신 text+check 제약 사용 / enum 타입은 값 추가·삭제 마이그레이션이 번거로워 초기 개발 단계에 부적합.
+- 2026-07-07 / `[확인 필요]` 4건 확정: 합성 점수 기본값 평균, 동점자 상위 등급 부여, 글자수 제한 500자, 원본 자동 삭제 끄기 / 사용자가 제안값 그대로 승인. SPEC·DATA_MODEL에서 `[확인 필요]` 표시 제거.

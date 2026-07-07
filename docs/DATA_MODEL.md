@@ -77,7 +77,7 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | owner_id | uuid | FK → profiles(id) on delete cascade, **NULL 허용** | NULL = 관리자 등록 기본 키 |
 | encrypted_key | text | not null | AES-256-GCM 암호문 (iv·tag 포함 인코딩). 키는 env `APP_ENCRYPTION_KEY` |
 | key_last4 | text | not null | 마스킹 표시용 끝 4자리 |
-| created_at | timestamptz | not null default now() |
+| created_at | timestamptz | not null default now() | |
 | updated_at | timestamptz | | |
 
 - unique 제약: `(provider_id, owner_id)` — 사용자당 프로바이더별 1키. 기본 키(owner_id NULL)도 프로바이더별 1키 (partial unique index `where owner_id is null`).
@@ -93,11 +93,11 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | owner_id | uuid | not null, FK → profiles(id) on delete cascade | 프로젝트 소유 교사 |
 | name | text | not null | |
 | grading_scheme | text | not null, check in ('grade5','grade9'), default 'grade5' | 5등급/9등급 토글 |
-| char_limit | integer | not null default 500 | 생기부 글자수 제한 `[확인 필요: 기본값 500]` |
+| char_limit | integer | not null default 500 | 생기부 글자수 제한 |
 | count_method | text | not null, check in ('chars','bytes'), default 'chars' | 글자수(공백 포함)/바이트(한글 3바이트) |
-| score_aggregation | text | not null, check in ('sum','avg','weighted'), default 'avg' | 합성 점수 방식 `[확인 필요: 기본값 avg]` |
-| tie_break | text | not null, check in ('best_grade','mid_rank'), default 'best_grade' | 동점자 처리 `[확인 필요: 기본값 상위 등급]` |
-| file_retention_days | integer | check in (null 또는 7, 30) | NULL = 자동 삭제 끄기(기본) `[확인 필요]` |
+| score_aggregation | text | not null, check in ('sum','avg','weighted'), default 'avg' | 합성 점수 방식 |
+| tie_break | text | not null, check in ('best_grade','mid_rank'), default 'best_grade' | 동점자 처리 (best_grade = 상위 등급 부여) |
+| file_retention_days | integer | check in (null 또는 7, 30) | NULL = 자동 삭제 끄기(기본) |
 | model_routing | jsonb | not null default 시드값 | `{extract, evaluate, generate, verify}` → `{provider_id, model}`. 기본: extract=claude-haiku-4-5, 나머지=claude-sonnet-4-6 |
 | needs_recalc | boolean | not null default false | 신규 제출물·체크박스 변경 시 true → "재계산 필요" 배지 (SPEC 6절) |
 | created_at / updated_at | timestamptz | | |
