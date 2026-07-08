@@ -23,6 +23,41 @@ export type AppSetting = {
   updated_by: string | null;
 };
 
+// providers (DATA_MODEL 3절). api_format은 어댑터 분기 키.
+export type ApiFormat = "anthropic" | "openai" | "google";
+
+export type Provider = {
+  id: string;
+  name: string;
+  base_url: string | null;
+  api_format: ApiFormat;
+  is_seed: boolean;
+  created_at: string;
+};
+
+// api_keys (DATA_MODEL 4절, INV-4).
+// encrypted_key는 서버 전용 — 클라이언트용 쿼리는 이 컬럼을 select 하지 않는다.
+export type ApiKey = {
+  id: string;
+  provider_id: string;
+  owner_id: string | null; // NULL = 관리자 등록 기본 키
+  encrypted_key: string;
+  key_last4: string;
+  created_at: string;
+  updated_at: string | null;
+};
+
+// audit_logs (DATA_MODEL 14절, append-only). insert는 service role 전용.
+export type AuditLog = {
+  id: string;
+  actor_id: string | null;
+  action: string;
+  entity: string;
+  entity_id: string | null;
+  detail: unknown;
+  created_at: string;
+};
+
 // Supabase 클라이언트 제네릭용 스키마 타입.
 // profiles Insert는 never — 생성 경로는 auth 트리거(handle_new_user)뿐이다.
 export type Database = {
@@ -38,6 +73,40 @@ export type Database = {
         Row: AppSetting;
         Insert: { key: string; value: unknown; updated_by?: string | null };
         Update: Partial<Omit<AppSetting, "key">>;
+        Relationships: [];
+      };
+      providers: {
+        Row: Provider;
+        Insert: {
+          name: string;
+          api_format: ApiFormat;
+          base_url?: string | null;
+          is_seed?: boolean;
+        };
+        Update: Partial<Pick<Provider, "name" | "base_url" | "api_format">>;
+        Relationships: [];
+      };
+      api_keys: {
+        Row: ApiKey;
+        Insert: {
+          provider_id: string;
+          owner_id?: string | null;
+          encrypted_key: string;
+          key_last4: string;
+        };
+        Update: Partial<Pick<ApiKey, "encrypted_key" | "key_last4">>;
+        Relationships: [];
+      };
+      audit_logs: {
+        Row: AuditLog;
+        Insert: {
+          actor_id?: string | null;
+          action: string;
+          entity: string;
+          entity_id?: string | null;
+          detail?: unknown;
+        };
+        Update: never;
         Relationships: [];
       };
     };

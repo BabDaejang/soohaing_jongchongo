@@ -24,3 +24,12 @@
 - 2026-07-07 / DB 행 타입은 interface가 아닌 type 별칭으로 선언 / postgrest-js의 Record<string, unknown> 제약은 암시적 인덱스 시그니처가 필요한데 interface는 이를 만족하지 못해 전 결과가 never로 추론되는 문제 확인.
 - 2026-07-07 / 마이그레이션 적용은 supabase CLI `db push --db-url` 방식(연결 문자열은 .env.local의 SUPABASE_DB_URL, 커밋 금지) / psql 미설치 환경이고, CLI가 supabase_migrations 이력 테이블로 세션 간 증분 적용을 관리해 주므로. DB 검증용으로 pg를 devDependency에 추가.
 - 2026-07-07 / 제공된 Supabase 프로젝트에 있던 이전 앱 테이블 4종(checkpoints, factsheets, projects, users) drop / 세션 4의 projects 테이블과 이름 충돌. 사용자가 "기존 테이블 삭제"를 명시 선택함.
+- 2026-07-08 / 세션 2 범위 = 관리자 패널 + API 키 체계·crypto·LLM 통합 클라이언트(원 PROGRESS의 세션 2 + 세션 3 병합) / 사용자 세션 2 지시에 따름. SPEC과 충돌 없음. 잔여 세션 번호는 한 칸씩 당겨지지 않고 PROGRESS에 병합 표기.
+- 2026-07-08 / audit_logs 테이블을 세션 2에서 도입(DATA_MODEL 원계획상 후속 세션 예정이었음) / 수용 기준 4(승인/거부/삭제가 audit_logs에 기록)를 충족하려면 이 세션에 필요. RLS: insert 정책 없음(=service role 전용), select는 admin, update/delete 없음(append-only).
+- 2026-07-08 / callLLM 시그니처는 modelRouting({provider_id, model} per RoutingKey)를 인자로 받고, purpose 추출·매칭은 모두 extract 키를 공유 / 프로젝트 model_routing 테이블은 세션 4에서 도입되므로, 세션 2 시점엔 라우팅을 호출부가 주입하도록 설계. DEFAULT_MODELS(추출/매칭 haiku, 평가/생성/검증 sonnet-4-6)는 lib/llm/routing.ts 상수로 두어 세션 4 기본값 조립에 재사용.
+- 2026-07-08 / resolveApiKey는 서비스 롤(admin 클라이언트)로 키를 조회하고 서버에서 복호화 / 기본 키(owner_id NULL)는 api_keys RLS상 admin만 select 가능하므로, 일반 교사가 기본 키를 사용하려면 서버 서비스롤 조회가 필수(INV-4: 복호화·평문은 서버 전용). 단위 테스트 가능성을 위해 fetchRows·decryptFn을 주입 가능하게 설계(기본값은 실제 구현).
+- 2026-07-08 / api_keys 쓰기(개인·기본)는 사용자 세션 클라이언트(RLS 경로)로, 프로필 삭제와 audit_logs 기록은 service role로 수행 / 개인 키=본인·기본 키=admin RLS를 실제로 통과시켜 권한을 이중 검증. 계정 삭제는 auth.users 삭제가 필요해 service role 불가피, 감사 로그 insert도 service role 전용.
+- 2026-07-08 / 서버 액션은 진입 시 requireAdmin()/requireApproved()로 권한을 한 번 더 강제(proxy.ts 경로 가드 + RLS와 함께 심층 방어) / 서버 액션은 경로와 무관하게 호출될 수 있으므로 미들웨어만으로는 부족.
+- 2026-07-08 / 단위 테스트 러너 = node:test + tsx, `--conditions=react-server`로 실행 / 최소 의존성. server-only 패키지는 기본 export 조건에서 throw하므로 react-server 조건을 줘 empty 모듈로 해석시켜야 서버 전용 모듈을 테스트에서 로드 가능.
+- 2026-07-08 / lib 구조는 crypto/·llm/ 디렉토리 채택(CLAUDE.md 디렉토리 계획), 세션 지시의 단일 파일(lib/crypto.ts·lib/llm.ts) 대신 / llm은 프로바이더 어댑터가 여러 개라 디렉토리가 자연스럽고 CLAUDE.md 구조와 일치. import 경로는 @/lib/crypto·@/lib/llm(index)로 동일하게 노출.
+- 2026-07-08 / rejected 사용자 안내 문구는 이번 세션에서 별도 분리하지 않고 /waiting 공통 화면 유지 / 별도 문구 정책은 사용자 요청이 없어 보류. 필요 시 후속 세션에서 app_settings에 rejected_message 키 추가로 확장 가능.

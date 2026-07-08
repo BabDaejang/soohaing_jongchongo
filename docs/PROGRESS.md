@@ -45,21 +45,26 @@
 
 ---
 
-## 세션 2 — (예정) 관리자 패널
+## 세션 2 — 2026-07-08 (관리자 패널 + API 키 체계 + LLM 통합 클라이언트) ✅ 완료
 
-- [ ] 관리자 화면: 사용자 목록·승인/거부/삭제 (profiles admin RLS 활용)
-- [ ] waiting_message 편집 UI (app_settings admin 쓰기)
-- [ ] rejected 사용자 안내 문구 정책 결정
-- [ ] **수용 기준**: admin이 아닌 계정은 /admin 접근·조작 불가(미들웨어+RLS 이중 확인), 승인/거부가 즉시 대기 화면에 반영
+> 범위 재편(DECISIONS 2026-07-08): 원 PROGRESS의 세션 2(관리자 패널) + 세션 3(API 키·crypto·LLM)을 사용자 세션 2 지시로 병합.
 
-## 세션 3 — (예정) API 키 체계·모델 라우팅
+- [x] 마이그레이션 `0002_providers_api_keys_audit.sql`: providers(시드 google/anthropic/openai)·api_keys(암호문+last4, owner NULL=기본 키, partial unique)·audit_logs(append-only) + RLS — 원격 적용·검증 완료
+- [x] `/admin` 패널: 계정 목록(상태 필터·승인/거부/삭제, audit 기록)·waiting_message 편집·프로바이더 관리([+] 추가)·프로바이더별 기본 키 등록/변경/삭제(끝 4자리 마스킹)
+- [x] `/account` 계정 옵션: 개인 API 키 등록/변경/삭제(프로바이더별, 마스킹)
+- [x] `lib/crypto/`: AES-256-GCM 암복호화(env `APP_ENCRYPTION_KEY`, server-only) + keyLast4
+- [x] `lib/llm/`: resolveApiKey(개인>기본>명시적 에러, 서비스롤 조회+서버 복호화)·callLLM(purpose→모델 라우팅, anthropic/openai/google 어댑터로 형식 흡수)·전부 server-only
+- [x] `lib/audit.ts`: 감사 로그 기록 헬퍼(service role, 평문 금지)
+- [x] 단위 테스트(node:test + tsx): crypto 왕복·IV 무작위·변조 감지, resolveApiKey 개인>기본>에러 — `npm test` 7건 통과
+- [x] **수용 기준 검증**: (1) api_keys에 평문 없음 — 마이그레이션엔 encrypted_key만, 라이브 DB e2e로 ciphertext≠plaintext 확인 / (2) 클라이언트 번들(.next/static)에 crypto·복호화·service role 키 문자열 없음(server-only 강제), 서버 번들엔 존재 / (3) 개인 키 우선 — 단위 테스트 + 라이브 e2e / (4) 승인/거부/삭제·키 set/delete가 audit_logs 기록 — 액션이 writeAuditLog 호출, service-role insert 경로 스모크 확인. typecheck·lint·build·test 모두 통과.
+- 특이사항: rejected 사용자 안내 문구는 /waiting 공통 화면 유지(별도 문구 보류 — DECISIONS 참조). 관리자 패널 UI 접근은 proxy.ts(admin 가드) + 서버 액션 requireAdmin() + RLS 삼중 방어.
 
-- [ ] providers 관리 UI (admin): 시드 3종 표시, [+] 추가 (name, base_url, api_format)
-- [ ] 기본 키 등록(admin) / 개인 키 등록·변경·삭제(사용자) — 개인 키 우선 해석
-- [ ] AES-256-GCM 암복호화 모듈 (`lib/crypto/`, 서버 전용, env `APP_ENCRYPTION_KEY`)
-- [ ] 화면 마스킹(끝 4자리), 평문 로그 금지 확인
-- [ ] LLM 프로바이더 어댑터(`lib/llm/`) + 용도별 모델 라우팅 (기본값: 추출/매칭 haiku, 평가/생성/검증 sonnet)
-- [ ] **수용 기준**: 키가 DB에 평문으로 존재하지 않음, 클라이언트 번들에 키 관련 코드 없음(INV-4), 라우팅 기본값 동작
+### 다음 세션(4) 인계
+
+- 세션 2가 원 계획의 세션 2+3을 병합했으므로, 남은 세션 번호(4~8)는 그대로 유지된다. 다음은 **세션 4 — 프로젝트·학생·루브릭 기초**.
+- 프로젝트 `model_routing` 기본값 조립 시 `lib/llm/routing.ts`의 `DEFAULT_MODELS`(추출/매칭=haiku, 평가/생성/검증=sonnet-4-6)와 시드 프로바이더 id를 결합할 것. callLLM은 이미 `{provider_id, model}` 라우팅을 인자로 받는다.
+- 마이그레이션 새 파일은 `supabase/migrations/`에 추가 후 `db push --db-url "$SUPABASE_DB_URL"`. providers 시드 id는 이름(google/anthropic/openai)으로 조회.
+- 서버 전용 모듈 테스트는 `--conditions=react-server` 필요(server-only). `npm test`가 이미 그 형태.
 
 ## 세션 4 — (예정) 프로젝트·학생·루브릭 기초
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "@/components/sign-out-button";
 
@@ -12,7 +13,7 @@ export default async function HomePage() {
   const { data: profile } = user
     ? await supabase
         .from("profiles")
-        .select("name, email")
+        .select("name, email, role")
         .eq("id", user.id)
         .maybeSingle()
     : { data: null };
@@ -28,7 +29,23 @@ export default async function HomePage() {
           프로젝트 목록이 여기에 표시됩니다 (세션 4 구현 예정).
         </p>
       </div>
-      <SignOutButton />
+      <nav className="flex items-center gap-4 text-sm">
+        <Link
+          href="/account"
+          className="text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+        >
+          계정 옵션
+        </Link>
+        {profile?.role === "admin" && (
+          <Link
+            href="/admin"
+            className="text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+          >
+            관리자 패널
+          </Link>
+        )}
+        <SignOutButton />
+      </nav>
     </main>
   );
 }
