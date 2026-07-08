@@ -68,7 +68,8 @@ export default async function ProjectHomePage({
           <PhaseCard
             step={1}
             title="Phase 1 · 수합"
-            desc="학생 산출물(엑셀·문서·PDF·이미지)을 업로드하면 텍스트를 추출하고, 학번으로 학생과 매칭합니다. 애매한 건은 확인 큐로 보내 교사가 확정합니다."
+            desc="학생 산출물(엑셀·문서·PDF·이미지)을 업로드하면 텍스트를 추출합니다. 학번 매칭·확인 큐는 다음 단계에서 확정합니다."
+            href={`/projects/${project.id}/ingest`}
           />
           <PhaseCard
             step={2}
@@ -110,25 +111,51 @@ function PhaseCard({
   step,
   title,
   desc,
+  href,
 }: {
   step: number;
   title: string;
   desc: string;
+  href?: string;
 }) {
-  return (
-    <li className="flex gap-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+  const inner = (
+    <>
       <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-100 text-sm font-semibold text-zinc-500 dark:bg-zinc-800">
         {step}
       </span>
       <div>
         <div className="flex items-center gap-2">
           <span className="font-medium">{title}</span>
-          <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-xs text-zinc-400 dark:bg-zinc-800">
-            준비 중
+          <span
+            className={`rounded px-1.5 py-0.5 text-xs ${
+              href
+                ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+                : "bg-zinc-100 text-zinc-400 dark:bg-zinc-800"
+            }`}
+          >
+            {href ? "이용 가능" : "준비 중"}
           </span>
         </div>
         <p className="mt-1 text-sm text-zinc-500">{desc}</p>
       </div>
+    </>
+  );
+
+  if (href) {
+    return (
+      <li>
+        <Link
+          href={href}
+          className="flex gap-4 rounded-lg border border-zinc-200 p-4 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+        >
+          {inner}
+        </Link>
+      </li>
+    );
+  }
+  return (
+    <li className="flex gap-4 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      {inner}
     </li>
   );
 }

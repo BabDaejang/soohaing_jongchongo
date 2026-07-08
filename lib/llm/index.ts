@@ -19,7 +19,14 @@ import { googleAdapter } from "./adapters/google";
 // LLM 통합 클라이언트 — 전부 서버 전용(INV-4). 'server-only'로 클라이언트 번들 유입을 차단한다.
 export { resolveApiKey } from "./keys";
 export { DEFAULT_MODELS, routingKeyForPurpose } from "./routing";
-export type { LLMMessage, ModelRouting, Purpose, LLMResult } from "./types";
+export type {
+  LLMMessage,
+  LLMContentPart,
+  ModelRouting,
+  ModelTarget,
+  Purpose,
+  LLMResult,
+} from "./types";
 
 const ADAPTERS: Record<ApiFormat, Adapter> = {
   anthropic: anthropicAdapter,

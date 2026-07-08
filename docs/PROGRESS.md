@@ -94,13 +94,30 @@
 - **용도별 model_routing 편집 UI 미구현(기본값 자동 조립만)** — 후속 세션(추천 배치: 세션 7)에서 프로바이더·모델 선택 목록과 함께 구현 예정(DECISIONS 2026-07-08). `resolveApiKey`가 routing.provider_id로 키를 고르므로 비-anthropic 개인 키 교사를 위해 실질적으로 필요. 현재는 anthropic haiku/sonnet 기본값이 조립되어 파이프라인 동작에는 공백 없음.
 - 새 마이그레이션은 `supabase/migrations/`에 추가 후 `db push --db-url "$SUPABASE_DB_URL"`. DB/RLS 검증은 devDependency `pg`로 스크래치에서 실행(저장소에 두지 않음).
 
-## 세션 5 — (예정) Phase 1(a) 업로드·파싱·중복 감지
+## 세션 5 — 2026-07-08 (Phase 1(a) 업로드·파싱·중복 감지) ✅ 완료
 
-- [ ] 다중 파일 업로드 (xlsx/csv/docx/pdf/이미지) → Storage 임시 버킷
-- [ ] 파싱 파이프라인(`lib/parsing/`): SheetJS·papaparse·mammoth·pdf 텍스트 + LLM 비전 OCR(스캔본)
-- [ ] 스프레드시트 열 매핑 UI: LLM 헤더 초기 추천 → 교사 확정
-- [ ] 재업로드 중복·변경 감지: (학생 식별값+제출물ID)+content_hash → 동일 스킵 / 변경 시 갱신 확인 큐 (자동 덮어쓰기 금지)
-- [ ] **수용 기준**: 동일 시트 2회 업로드 시 중복 0건 생성, 내용 변경분은 update_pending으로만 대기
+- [x] 마이그레이션 `0004_submissions.sql`: submissions(스테이징 — student_id NULL·match_status='unmatched', raw_student_no/name 추가) + 조회 인덱스 + RLS(소유자 CRUD·admin select) + Storage `originals` 비공개 버킷·소유자 경로 정책 4종 — 원격 적용·pg 검증 완료.
+- [x] 다중 파일 드래그앤드롭 업로드(xlsx/csv/docx/pdf/이미지) → 브라우저 클라이언트로 `originals`(RLS owner 경로) 업로드.
+- [x] 파싱 파이프라인 `lib/parsing/`: parseXlsx(SheetJS)·parseCsv(papaparse)·parseDocx(mammoth)·parsePdfText(unpdf 텍스트레이어, 스캔 판정)·normalizeText/sha256Hex·decideDedup·fileKind.
+- [x] 비전 OCR: `lib/llm` 확장(LLMMessage.content = string | 파트[], 어댑터 3종 image/document 매핑) + 스캔 PDF·이미지를 callLLM(purpose='추출')으로. **OCR 프로바이더·모델 선택기**(VISION_MODELS 카탈로그, model_routing.extract에 저장).
+- [x] 스프레드시트 열 매핑 UI: 헤더 미리보기 + LLM 초기 추천(callLLM purpose='추출', 실패 시 휴리스틱 폴백) → 교사 확정 → 행 분해.
+- [x] 재업로드 중복·변경 감지: (project, raw 식별값, submission_key)로 조회 → content_hash 동일 스킵 / 변경 시 match_status='update_pending' + pending_content(자동 덮어쓰기 금지).
+- [x] 인제스트 화면(`/projects/[id]/ingest`), 프로젝트 홈 Phase 1 링크 활성화, 수합된 제출물 후보 목록.
+- [x] 단위 테스트 5건 추가(parsing·dedup·vision-content) — `npm test` 19건 통과.
+- [x] **수용 기준 검증**:
+  (1) 4종 추출: xlsx/csv 왕복·pdf 텍스트레이어 추출은 단위 테스트로 확인(파서 임포트 시 mammoth/unpdf 로드 스모크 포함), 스캔 PDF·이미지 vision_ocr 경로는 유효 키가 있을 때 라이브 시연(비용 발생 — 관리자 기본 키 필요). callLLM 라우팅·비전 파트 매핑은 단위 테스트로 증명.
+  (2) 중복 0건·update_pending: decideDedup 단위 테스트 + persistSubmission 로직 + pg로 (project, key, 식별값) 조회 경로·인덱스 검증.
+  (3) 원본 바이너리 미저장: submissions에 바이너리 컬럼 없음(content_text=text만), 원본은 Storage에만.
+  (4) typecheck·lint·build·test 통과. INV-4 클라이언트 번들 스캔(service role 키·crypto 마커 부재) 확인.
+- 특이사항: 스키마는 DATA_MODEL로 정합(팩과 명칭 차이), raw 식별 컬럼·'unmatched' 상태 추가, OCR 선택기는 라우팅 편집기의 extract 부분 — 모두 DECISIONS 2026-07-08. SheetJS advisory는 세션 9 QA 재검토 항목.
+
+### 다음 세션(6) 인계
+
+- 세션 6 = Phase 1(b) 매칭·확인 큐·원본 삭제. 매칭 규칙 (a)~(d)는 submissions.raw_student_no(학번 일치=auto_matched)·raw_student_name(이름만=pending_confirm) 기준. LLM 후보 제안은 callLLM(purpose='매칭')→match_candidates.
+- 원본 삭제(INV-5): extraction_approved_at 설정 후에만 Storage `originals` 삭제. Storage RLS는 소유자 경로만 허용하므로 삭제도 소유자 세션으로. N일 자동 삭제 보조 정책도 동일 조건.
+- update_pending 항목은 세션 6 확인 큐에서 pending_content를 content_text로 반영/거부.
+- Phase 2·3 진행 중에도 이 화면으로 돌아와 자료 추가 가능(매칭 규칙 동일).
+- 새 마이그레이션은 `db push --db-url`. DB/RLS 검증은 스크래치 pg(미커밋).
 
 ## 세션 6 — (예정) Phase 1(b) 매칭·확인 큐·원본 삭제
 

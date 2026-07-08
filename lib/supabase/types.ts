@@ -122,6 +122,44 @@ export type Student = {
   updated_at: string | null;
 };
 
+// submissions (DATA_MODEL 8절). 세션 5: 스테이징(student_id NULL, match_status='unmatched').
+export type SubmissionSourceType =
+  | "xlsx"
+  | "csv"
+  | "docx"
+  | "pdf_text"
+  | "pdf_scan"
+  | "image"
+  | "manual";
+export type MatchStatus =
+  | "unmatched"
+  | "auto_matched"
+  | "pending_confirm"
+  | "confirmed"
+  | "update_pending";
+
+export type Submission = {
+  id: string;
+  project_id: string;
+  student_id: string | null;
+  raw_student_no: string | null;
+  raw_student_name: string | null;
+  submission_key: string | null;
+  source_filename: string | null;
+  content_text: string;
+  content_hash: string;
+  source_type: SubmissionSourceType;
+  storage_path: string | null;
+  match_status: MatchStatus;
+  match_candidates: unknown;
+  pending_content: unknown;
+  include_in_eval: boolean;
+  include_in_record: boolean;
+  extraction_approved_at: string | null;
+  created_at: string;
+  updated_at: string | null;
+};
+
 // Supabase 클라이언트 제네릭용 스키마 타입.
 // profiles Insert는 never — 생성 경로는 auth 트리거(handle_new_user)뿐이다.
 export type Database = {
@@ -220,6 +258,42 @@ export type Database = {
         };
         Update: Partial<
           Pick<Student, "name" | "student_number" | "teacher_memo">
+        >;
+        Relationships: [];
+      };
+      submissions: {
+        Row: Submission;
+        Insert: {
+          project_id: string;
+          content_text: string;
+          content_hash: string;
+          source_type: SubmissionSourceType;
+          student_id?: string | null;
+          raw_student_no?: string | null;
+          raw_student_name?: string | null;
+          submission_key?: string | null;
+          source_filename?: string | null;
+          storage_path?: string | null;
+          match_status?: MatchStatus;
+          match_candidates?: unknown;
+          pending_content?: unknown;
+          include_in_eval?: boolean;
+          include_in_record?: boolean;
+        };
+        Update: Partial<
+          Pick<
+            Submission,
+            | "content_text"
+            | "content_hash"
+            | "source_type"
+            | "match_status"
+            | "pending_content"
+            | "storage_path"
+            | "raw_student_no"
+            | "raw_student_name"
+            | "include_in_eval"
+            | "include_in_record"
+          >
         >;
         Relationships: [];
       };

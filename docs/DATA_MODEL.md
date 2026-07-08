@@ -142,23 +142,26 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | --- | --- | --- | --- |
 | id | uuid | PK | |
 | project_id | uuid | not null, FK → projects(id) on delete cascade | |
-| student_id | uuid | FK → students(id) on delete set null, **NULL 허용** | 매칭 확정 전 NULL. **NULL이면 평가·생성 컨텍스트에서 절대 제외** |
-| submission_key | text | | 시트의 제출물ID 열 값. 중복 감지 키 `(student식별값 + submission_key)` |
-| content_text | text | not null | 추출·정제된 텍스트 (DB에는 이것만 저장 — SPEC 5.3) |
+| student_id | uuid | FK → students(id) on delete set null, **NULL 허용** | 매칭 확정 전 NULL(세션 5는 항상 NULL). **NULL이면 평가·생성 컨텍스트에서 절대 제외** |
+| raw_student_no | text | | 업로드에서 추출한 원본 학번(매칭용, 세션 6). **세션 5 도입** (DECISIONS 2026-07-08) |
+| raw_student_name | text | | 업로드에서 추출한 원본 이름(매칭용, 세션 6). **세션 5 도입** |
+| submission_key | text | | 시트의 제출물ID 열 값 또는 파일명. 중복 감지 키 `(project_id + 학생 식별값 + submission_key)` |
+| content_text | text | not null | 추출·정제된(정규화) 텍스트 (DB에는 이것만 저장 — SPEC 5.3) |
 | content_hash | text | not null | 정규화 텍스트 SHA-256 — 재업로드 중복·변경 감지 |
-| source_type | text | not null, check in ('xlsx','csv','docx','pdf_text','pdf_scan','image','manual') | |
+| source_type | text | not null, check in ('xlsx','csv','docx','pdf_text','pdf_scan','image','manual') | pdf는 텍스트레이어=pdf_text / 스캔(비전 OCR)=pdf_scan |
 | source_filename | text | | 원본 파일명 |
 | storage_path | text | | Storage 임시 버킷 경로. 삭제 후 NULL |
-| match_status | text | not null, check in ('auto_matched','pending_confirm','confirmed','update_pending') | (a)학번 일치=auto_matched / (b)(c)=pending_confirm / 교사 확정=confirmed / 재업로드 내용 변경=update_pending |
-| match_candidates | jsonb | | 확인 대기 큐용 후보: `[{student_id, reason}]` (LLM 제안 포함) |
+| match_status | text | not null default 'unmatched', check in ('unmatched','auto_matched','pending_confirm','confirmed','update_pending') | 세션 5 스테이징=unmatched / (a)학번 일치=auto_matched / (b)(c)=pending_confirm / 교사 확정=confirmed / 재업로드 내용 변경=update_pending. **'unmatched' 세션 5 도입** (DECISIONS 2026-07-08) |
+| match_candidates | jsonb | | 확인 대기 큐용 후보: `[{student_id, reason}]` (LLM 제안 포함, 세션 6) |
 | pending_content | jsonb | | update_pending일 때 새 내용·해시 보관 (교사 승인 전 원본 유지 — 자동 덮어쓰기 금지) |
 | include_in_eval | boolean | not null default true | 평가 반영 체크박스 |
 | include_in_record | boolean | not null default true | 생기부 반영 체크박스 |
-| extraction_approved_at | timestamptz | | 교사의 추출 품질 승인 시각. **NULL이면 원본 파일 삭제 금지 (INV-5)** — 자동 삭제(N일)도 이 조건을 우선한다 |
+| extraction_approved_at | timestamptz | | 교사의 추출 품질 승인 시각. **NULL이면 원본 파일 삭제 금지 (INV-5)** — 자동 삭제(N일)도 이 조건을 우선한다 (세션 6) |
 | created_at / updated_at | timestamptz | | |
 
-- 중복 감지 로직: 업로드 시 `(project_id, 학생 식별값, submission_key)`로 기존 행 조회 → content_hash 동일하면 스킵, 다르면 `match_status='update_pending'` + pending_content에 보관.
-- **RLS**: 프로젝트 소유자만. Storage 버킷도 소유자 경로 기반 정책(`{project_id}/...`).
+- 중복 감지 로직(세션 5): 업로드 시 `(project_id, 학생 식별값(raw_student_no/name), submission_key)`로 기존 행 조회 → content_hash 동일하면 스킵, 다르면 `match_status='update_pending'` + pending_content에 보관. 하드 unique 제약 대신 애플리케이션 로직(조회용 인덱스만) — update_pending 스테이징을 허용하기 위해 (DECISIONS 2026-07-08).
+- 세션 5는 매칭을 하지 않는다: 모든 파싱 행 `student_id NULL`·`match_status='unmatched'`. 매칭은 세션 6.
+- **RLS**(세션 5 마이그레이션 0004): select = `owns_project()` or admin, insert/update/delete = `owns_project()` and 승인됨. Storage 버킷 `originals`(비공개)는 경로 첫 세그먼트(owner_id)=auth.uid() 소유자 정책. 경로는 `{owner_id}/{project_id}/{fileUuid}__{filename}` — 스프레드시트 1파일→다행이라 submission_id를 경로에 못 씀 (DECISIONS 2026-07-08).
 
 ## 9. evaluations — 제출물 단위 LLM 채점
 
@@ -258,6 +261,6 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 
 ## Storage (테이블 아님)
 
-- 버킷 `originals` (비공개): 원본 파일 임시 보관. 경로 `{owner_id}/{project_id}/{submission_id}/{filename}`.
-- 정책: 경로 첫 세그먼트 = auth.uid()인 소유자만 read/write.
-- 삭제 조건: 해당 submission의 `extraction_approved_at IS NOT NULL` (INV-5). 자동 삭제(N일) 배치도 동일 조건 필수.
+- 버킷 `originals` (비공개, 세션 5 마이그레이션 0004 도입): 원본 파일 임시 보관. 경로 `{owner_id}/{project_id}/{fileUuid}__{filename}` — 스프레드시트는 1파일이 다수 행(제출물)으로 분해되어 submission_id를 경로에 쓸 수 없으므로 파일 단위 uuid를 쓴다 (DECISIONS 2026-07-08).
+- 정책(0004): 경로 첫 세그먼트(owner_id) = auth.uid()인 소유자만 read/write (select/insert/update/delete 4정책).
+- 삭제 조건: 해당 submission의 `extraction_approved_at IS NOT NULL` (INV-5). 자동 삭제(N일) 배치도 동일 조건 필수 — 삭제 흐름은 세션 6.

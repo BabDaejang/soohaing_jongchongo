@@ -1,8 +1,10 @@
 import "server-only";
 import type { Adapter } from "../types";
+import { contentToText, toAnthropicContent } from "../content";
 
 // Anthropic Messages API (POST {baseUrl}/v1/messages).
 // system 역할 메시지는 최상위 system 필드로, 나머지는 messages 배열로 보낸다.
+// content가 배열이면 이미지/PDF 블록으로 매핑된다(비전 OCR — 세션 5).
 export const anthropicAdapter: Adapter = async ({
   baseUrl,
   apiKey,
@@ -13,11 +15,11 @@ export const anthropicAdapter: Adapter = async ({
 }) => {
   const system = messages
     .filter((m) => m.role === "system")
-    .map((m) => m.content)
+    .map((m) => contentToText(m.content))
     .join("\n\n");
   const chat = messages
     .filter((m) => m.role !== "system")
-    .map((m) => ({ role: m.role, content: m.content }));
+    .map((m) => ({ role: m.role, content: toAnthropicContent(m.content) }));
 
   const body: Record<string, unknown> = {
     model,

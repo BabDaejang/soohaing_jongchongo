@@ -1,9 +1,11 @@
 import "server-only";
 import type { Adapter } from "../types";
+import { contentToText, toGoogleContent } from "../content";
 
 // Google Gemini generateContent API
 // (POST {baseUrl}/v1beta/models/{model}:generateContent?key=...).
 // system 메시지는 systemInstruction으로, assistant는 role 'model'로 매핑한다.
+// content가 배열이면 inlineData(이미지/PDF) parts로 매핑된다(비전 OCR — 세션 5).
 export const googleAdapter: Adapter = async ({
   baseUrl,
   apiKey,
@@ -14,13 +16,13 @@ export const googleAdapter: Adapter = async ({
 }) => {
   const systemText = messages
     .filter((m) => m.role === "system")
-    .map((m) => m.content)
+    .map((m) => contentToText(m.content))
     .join("\n\n");
   const contents = messages
     .filter((m) => m.role !== "system")
     .map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
-      parts: [{ text: m.content }],
+      parts: toGoogleContent(m.content),
     }));
 
   const generationConfig: Record<string, unknown> = { maxOutputTokens: maxTokens };

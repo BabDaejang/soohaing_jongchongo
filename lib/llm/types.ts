@@ -3,9 +3,25 @@ import type { ApiFormat } from "@/lib/supabase/types";
 
 export type LLMRole = "system" | "user" | "assistant";
 
+// 메시지 콘텐츠 파트 (비전 OCR 지원 — 세션 5). 텍스트/이미지/PDF 문서.
+// dataBase64는 개행 없는 base64. mediaType 예: image/png, image/jpeg, application/pdf.
+export type LLMTextPart = { type: "text"; text: string };
+export type LLMImagePart = {
+  type: "image";
+  mediaType: string;
+  dataBase64: string;
+};
+export type LLMDocumentPart = {
+  type: "document";
+  mediaType: "application/pdf";
+  dataBase64: string;
+};
+export type LLMContentPart = LLMTextPart | LLMImagePart | LLMDocumentPart;
+
 export type LLMMessage = {
   role: LLMRole;
-  content: string;
+  // string이면 기존 텍스트 전용 동작. 배열이면 이미지/PDF 파트를 포함할 수 있다.
+  content: string | LLMContentPart[];
 };
 
 // 생기부 파이프라인 용도 (SPEC 3·6·7절). 매칭은 추출과 같은 저비용 라우팅 키를 쓴다.
