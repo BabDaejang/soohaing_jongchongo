@@ -92,17 +92,18 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | id | uuid | PK | |
 | owner_id | uuid | not null, FK → profiles(id) on delete cascade | 프로젝트 소유 교사 |
 | name | text | not null | |
+| description | text | | 프로젝트 설명 (선택) — 세션 4 도입 (DECISIONS 2026-07-08) |
 | grading_scheme | text | not null, check in ('grade5','grade9'), default 'grade5' | 5등급/9등급 토글 |
 | char_limit | integer | not null default 500 | 생기부 글자수 제한 |
 | count_method | text | not null, check in ('chars','bytes'), default 'chars' | 글자수(공백 포함)/바이트(한글 3바이트) |
 | score_aggregation | text | not null, check in ('sum','avg','weighted'), default 'avg' | 합성 점수 방식 |
 | tie_break | text | not null, check in ('best_grade','mid_rank'), default 'best_grade' | 동점자 처리 (best_grade = 상위 등급 부여) |
 | file_retention_days | integer | check in (null 또는 7, 30) | NULL = 자동 삭제 끄기(기본) |
-| model_routing | jsonb | not null default 시드값 | `{extract, evaluate, generate, verify}` → `{provider_id, model}`. 기본: extract=claude-haiku-4-5, 나머지=claude-sonnet-4-6 |
-| needs_recalc | boolean | not null default false | 신규 제출물·체크박스 변경 시 true → "재계산 필요" 배지 (SPEC 6절) |
+| model_routing | jsonb | not null (**SQL default 없음** — 앱이 조립 삽입) | `{extract, evaluate, generate, verify}` → `{provider_id, model}`. 기본: extract=claude-haiku-4-5, 나머지=claude-sonnet-4-6. 컬럼 default가 providers 시드 id를 서브쿼리로 참조할 수 없어, `createProject`가 `buildDefaultModelRouting()`으로 조립해 삽입 (DECISIONS 2026-07-08) |
+| needs_recalc | boolean | not null default false | 신규 제출물·체크박스 변경 시 true → "재계산 필요" 배지 (SPEC 6절). **세션 7 마이그레이션에서 추가** — Phase 2 전용, 세션 4엔 소비처 없음 (DECISIONS 2026-07-08) |
 | created_at / updated_at | timestamptz | | |
 
-- **RLS**: `owner_id = auth.uid()` and 승인됨 — 전 작업. 교사 간 공유 기능은 스펙에 없으므로 없음.
+- **RLS**(세션 4 마이그레이션 0003): select = 소유자 or admin(전체 열람), insert/update = 소유자 and 승인됨, delete = 소유자. 교사 간 공유 기능은 스펙에 없으므로 없음.
 
 ## 6. rubrics — 평가 루브릭
 
@@ -113,9 +114,9 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | criteria | jsonb | not null | 기준 배열: `[{id, name, description, max_score, weight}]`. weight는 score_aggregation='weighted'일 때 사용 |
 | created_at / updated_at | timestamptz | | |
 
-- 프로젝트당 1행(unique project_id)으로 시작. 기준 추가/수정은 jsonb 갱신.
-- 루브릭 변경 시 `projects.needs_recalc = true`.
-- **RLS**: 프로젝트 소유자만 (owns_project 경유).
+- 프로젝트당 1행(unique project_id)으로 시작. 기준 추가/수정은 jsonb 갱신. 프로젝트 생성 시 기본 루브릭 시드(과제 이해도/탐구 과정의 구체성/사고의 깊이/표현·완성도) 1행 자동 생성 (세션 4).
+- 루브릭 변경 시 `projects.needs_recalc = true` (세션 7 — needs_recalc 도입 후).
+- **RLS**(세션 4 마이그레이션 0003): select = `owns_project()` or admin, insert/update/delete = `owns_project()` and 승인됨. `owns_project(uuid)` SECURITY DEFINER 헬퍼는 0003에서 신설.
 
 ## 7. students — 학생 (프로젝트 종속)
 
@@ -126,13 +127,14 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | student_number | text | | 학번. unique `(project_id, student_number)` (NULL 제외 partial) |
 | name | text | not null | |
 | teacher_memo | text | | 교사 개인 관찰 메모 (SPEC 7.4) — 이 학생 레코드에 귀속 (INV-2 예외 경로) |
-| score_override | numeric | | 교사 개입 점수 (SPEC 6절). NULL = 미사용 |
-| override_reason | text | | **score_override가 NOT NULL이면 필수** (check 제약: 둘 다 NULL이거나 둘 다 NOT NULL) |
+| score_override | numeric | | 교사 개입 점수 (SPEC 6절). NULL = 미사용. **세션 7 마이그레이션에서 추가** — Phase 2 전용 (DECISIONS 2026-07-08) |
+| override_reason | text | | **score_override가 NOT NULL이면 필수** (check 제약: 둘 다 NULL이거나 둘 다 NOT NULL). **세션 7 마이그레이션에서 추가** |
 | created_at / updated_at | timestamptz | | |
 
-- 자동 생성은 "학번 신규 검출" 시에만 (SPEC 5.2-d). 그 외 신규 생성은 교사 확인 UI 경유.
-- score_override 변경은 audit_logs에 기록.
-- **RLS**: 프로젝트 소유자만.
+- 세션 4(마이그레이션 0003)엔 `score_override/override_reason`를 제외하고 `student_number, name, teacher_memo`만 생성한다 (해당 컬럼은 Phase 2 소비처가 생기는 세션 7에서 추가).
+- 자동 생성은 "학번 신규 검출" 시에만 (SPEC 5.2-d). 그 외 신규 생성은 교사 확인 UI 경유. 세션 4는 수동 추가만 제공.
+- score_override 변경은 audit_logs에 기록 (세션 7).
+- **RLS**(세션 4 마이그레이션 0003): select = `owns_project()` or admin, insert/update/delete = `owns_project()` and 승인됨.
 
 ## 8. submissions — 제출물
 

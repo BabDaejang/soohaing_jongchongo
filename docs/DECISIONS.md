@@ -33,3 +33,9 @@
 - 2026-07-08 / 단위 테스트 러너 = node:test + tsx, `--conditions=react-server`로 실행 / 최소 의존성. server-only 패키지는 기본 export 조건에서 throw하므로 react-server 조건을 줘 empty 모듈로 해석시켜야 서버 전용 모듈을 테스트에서 로드 가능.
 - 2026-07-08 / lib 구조는 crypto/·llm/ 디렉토리 채택(CLAUDE.md 디렉토리 계획), 세션 지시의 단일 파일(lib/crypto.ts·lib/llm.ts) 대신 / llm은 프로바이더 어댑터가 여러 개라 디렉토리가 자연스럽고 CLAUDE.md 구조와 일치. import 경로는 @/lib/crypto·@/lib/llm(index)로 동일하게 노출.
 - 2026-07-08 / rejected 사용자 안내 문구는 이번 세션에서 별도 분리하지 않고 /waiting 공통 화면 유지 / 별도 문구 정책은 사용자 요청이 없어 보류. 필요 시 후속 세션에서 app_settings에 rejected_message 키 추가로 확장 가능.
+- 2026-07-08 / (세션 4) projects에 description(text, nullable) 컬럼 추가, DATA_MODEL 5절 갱신 / 세션 4 지시가 "이름, 설명"을 명시. SPEC 4절은 컬럼을 열거하지 않아 충돌 없음. 스키마 SSOT(DATA_MODEL) 갱신 후 마이그레이션.
+- 2026-07-08 / (세션 4) 세션 지시의 `student_no`는 DATA_MODEL 7절 `student_number`의 약칭으로 간주해 `student_number` 채택 / 컬럼명은 스키마 SSOT(DATA_MODEL)를 따른다.
+- 2026-07-08 / (세션 4) Phase 2 전용 컬럼(students.score_override·override_reason, projects.needs_recalc)은 0003에서 제외하고 세션 7 마이그레이션으로 연기 / "각 세션에 필요한 테이블/컬럼만 추가"라는 세션 지시 준수. 세션 4엔 소비처(채점·재계산)가 없어 추가하면 강제되지 않는 dead schema가 됨. DATA_MODEL에 "세션 7 추가" 주석으로 시점만 명시(최종 스키마는 불변).
+- 2026-07-08 / (세션 4) projects.model_routing은 SQL 컬럼 default 없이 not null만 두고, createProject 서버 액션이 buildDefaultModelRouting()으로 조립해 삽입 / Postgres 컬럼 default는 다른 테이블(providers)의 시드 provider_id를 서브쿼리로 참조할 수 없음. lib/llm/routing.ts의 DEFAULT_MODELS + 이름으로 조회한 anthropic provider_id로 앱에서 조립(세션 지시: 새 상수 만들지 말 것). DATA_MODEL 5절의 "default 시드값" 문구를 이에 맞게 수정.
+- 2026-07-08 / (세션 4, 수용 기준 3) 프로젝트 삭제 시 하위 students·rubrics는 FK on delete cascade로 함께 삭제 / 학생·루브릭은 프로젝트 종속 데이터로 독립 존재 의미가 없고, 프로젝트별 독립(혼입 방지) 설계이므로 프로젝트 삭제 = 전부 삭제가 맞다. DATA_MODEL의 on delete cascade와 일치.
+- 2026-07-08 / (세션 4) owns_project(uuid) SECURITY DEFINER 헬퍼를 0003에서 신설 / DATA_MODEL 공통 규약에 예정됐으나 미작성 상태였음. students·rubrics RLS가 projects 소유 여부를 참조할 때 정책 재귀·성능을 위해 definer 함수로 캡슐화(is_admin/is_approved와 동일 패턴).

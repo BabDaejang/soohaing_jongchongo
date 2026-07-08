@@ -71,7 +71,9 @@ export async function proxy(request: NextRequest) {
   const profile: Pick<Profile, "role" | "status"> | null = data;
 
   if (profile?.status !== "approved") {
-    // pending·rejected는 물론, 프로필 행이 없는 예외 상황도 보수적으로 대기 화면만 허용
+    // pending·rejected는 물론, 프로필 행이 없는 예외 상황도 보수적으로 대기 화면만 허용.
+    // 이 게이트가 /projects/* 를 포함한 모든 앱 라우트를 approved 전용으로 강제한다(세션 4).
+    // 프로젝트 소유권은 라우트 수준이 아니라 RLS(owns_project)·서버 액션·페이지 조회에서 강제한다.
     return pathname === "/waiting" ? supabaseResponse : redirectTo("/waiting");
   }
 

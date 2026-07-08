@@ -66,13 +66,32 @@
 - 마이그레이션 새 파일은 `supabase/migrations/`에 추가 후 `db push --db-url "$SUPABASE_DB_URL"`. providers 시드 id는 이름(google/anthropic/openai)으로 조회.
 - 서버 전용 모듈 테스트는 `--conditions=react-server` 필요(server-only). `npm test`가 이미 그 형태.
 
-## 세션 4 — (예정) 프로젝트·학생·루브릭 기초
+## 세션 4 — 2026-07-08 (프로젝트·학생·루브릭 기초) ✅ 완료
 
-- [ ] 프로젝트 목록/생성/수정/삭제 (로그인 후 첫 화면)
-- [ ] 프로젝트 설정: 등급제 토글, 글자수 제한·카운트 방식, 합성 방식, 동점자 처리, 원본 삭제 정책, 모델 라우팅
-- [ ] 루브릭 편집 UI (기준·배점·가중치)
-- [ ] 학생 목록·수동 추가·수정·삭제, 교사 관찰 메모 입력 박스
-- [ ] **수용 기준**: 프로젝트 CRUD 전체 동작, 타 사용자 프로젝트 접근 불가(RLS 검증)
+- [x] 마이그레이션 `0003_projects_students_rubrics.sql`: projects·rubrics·students + `owns_project()` SECURITY DEFINER 헬퍼 + RLS(소유자 CRUD·승인, admin select) — 원격 적용·pg 검증 완료. 하위 FK는 on delete cascade.
+- [x] 프로젝트 목록/생성/수정/삭제 (로그인 후 첫 화면 `app/page.tsx` = `ProjectList`). 생성 시 model_routing 조립 + 기본 루브릭 시드.
+- [x] 프로젝트 홈(`/projects/[id]`): 준비(설정·루브릭·학생) + Phase 1/2/3 흐름 안내 문구.
+- [x] 프로젝트 설정(`/settings`): 등급제·글자수·카운트 방식·합성 방식·동점자·원본 삭제 정책 편집. 저장→재로드 왕복. (model_routing은 생성 시 기본 조립, 용도별 편집 UI는 실제 파이프라인 세션에서.)
+- [x] 루브릭 편집(`/rubric`): 기준 CRUD(이름/설명/배점/가중치), 서버 재검증.
+- [x] 학생 목록(`/students`): 수동 추가/수정/삭제(학번 중복 방지) + 학생별 교사 관찰 메모 자동 저장(디바운스, "저장됨" 표시).
+- [x] `lib/llm/routing.ts`에 `buildDefaultModelRouting()` 추가(DEFAULT_MODELS + 조회한 anthropic provider_id), `lib/projects.ts`에 `requireProjectOwner()`(심층 방어).
+- [x] proxy.ts: 기존 approved 게이트가 `/projects/*`를 approved 전용으로 강제함을 주석 명시(소유권은 RLS·액션·페이지에서 강제).
+- [x] 단위 테스트 `tests/model-routing.test.ts` 추가 — `npm test` 9건 통과.
+- [x] **수용 기준 검증**:
+  (1) 프로젝트 생성→수정→삭제, 설정 저장/재로드 왕복 — 액션+SettingsForm 동작, build 통과.
+  (2) 타 사용자 접근 차단 — 스크래치 pg 스크립트(미커밋)로 두 사용자 교차 접근 12건 검증: B의 A 프로젝트/학생/루브릭 select 0행, update/delete 0행, insert RLS 42501 차단, A는 자기 데이터 접근 가능.
+  (3) 삭제 시 하위 cascade — FK on delete cascade 구현 + DECISIONS 기록.
+  (4) model_routing 기본값 = DEFAULT_MODELS + 시드 provider id — buildDefaultModelRouting + 단위 테스트로 증명.
+  (5) typecheck·lint·build·test 모두 통과.
+- 특이사항: 세션 지시의 `student_no`는 DATA_MODEL의 `student_number`로 채택. description 컬럼 추가, model_routing은 앱 조립(SQL default 없음), Phase 2 전용 컬럼(needs_recalc/score_override/override_reason)은 세션 7로 연기 — 모두 DECISIONS 2026-07-08 기록.
+
+### 다음 세션(5) 인계
+
+- 세션 5 = Phase 1(a) 업로드·파싱·중복 감지. submissions 테이블 마이그레이션은 세션 5에서 작성.
+- 프로젝트별 파일 파싱 시 `projects.model_routing.extract`(purpose='추출'/'매칭')로 `callLLM` 라우팅 인자를 넘길 것. routing은 `{provider_id, model}` 형태로 이미 저장됨.
+- 학생 자동 생성은 "학번 신규 검출" 시에만(SPEC 5.2-d) — 세션 4는 수동 추가만 제공. 매칭·확인 큐는 세션 6.
+- Storage 임시 버킷(`originals`)·정책은 아직 없음 — 세션 5에서 도입.
+- 새 마이그레이션은 `supabase/migrations/`에 추가 후 `db push --db-url "$SUPABASE_DB_URL"`. DB/RLS 검증은 devDependency `pg`로 스크래치에서 실행(저장소에 두지 않음).
 
 ## 세션 5 — (예정) Phase 1(a) 업로드·파싱·중복 감지
 
