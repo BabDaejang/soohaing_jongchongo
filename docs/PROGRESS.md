@@ -91,6 +91,7 @@
 - 프로젝트별 파일 파싱 시 `projects.model_routing.extract`(purpose='추출'/'매칭')로 `callLLM` 라우팅 인자를 넘길 것. routing은 `{provider_id, model}` 형태로 이미 저장됨.
 - 학생 자동 생성은 "학번 신규 검출" 시에만(SPEC 5.2-d) — 세션 4는 수동 추가만 제공. 매칭·확인 큐는 세션 6.
 - Storage 임시 버킷(`originals`)·정책은 아직 없음 — 세션 5에서 도입.
+- **용도별 model_routing 편집 UI 미구현(기본값 자동 조립만)** — 후속 세션(추천 배치: 세션 7)에서 프로바이더·모델 선택 목록과 함께 구현 예정(DECISIONS 2026-07-08). `resolveApiKey`가 routing.provider_id로 키를 고르므로 비-anthropic 개인 키 교사를 위해 실질적으로 필요. 현재는 anthropic haiku/sonnet 기본값이 조립되어 파이프라인 동작에는 공백 없음.
 - 새 마이그레이션은 `supabase/migrations/`에 추가 후 `db push --db-url "$SUPABASE_DB_URL"`. DB/RLS 검증은 devDependency `pg`로 스크래치에서 실행(저장소에 두지 않음).
 
 ## 세션 5 — (예정) Phase 1(a) 업로드·파싱·중복 감지
@@ -115,6 +116,7 @@
 - [ ] 제출물 단위 LLM 채점: 루브릭 기반, temperature 0, 기준별 근거 인용, 원문 감사 보관
 - [ ] 합성 점수(합/평균/가중) → 순위 → 등급 파생 (5등급/9등급 누적 비율 매핑, 토글 즉시 반영)
 - [ ] 동점자 처리 (상위 등급/중간석차), score_override(사유 필수 + 감사 로그) 경유 재계산
+- [ ] (세션 4 이월, 배치 확정) 프로젝트 설정에 용도별 model_routing 편집 UI: 프로바이더·모델 선택으로 extract/evaluate/generate/verify 라우팅 조정. DEFAULT_MODELS 기본값 위에서 교사가 `{provider_id, model}` 변경. resolveApiKey가 routing.provider_id로 키를 고름. (DECISIONS 2026-07-08, 사용자 확인 2026-07-08)
 - [ ] **수용 기준**: 등급 직접 수정 경로 없음(INV-6), student_scores는 서버 배치만 씀, override에 사유 없으면 거부
 
 ## 세션 8 — (예정) Phase 3 생기부 + 결과 화면
