@@ -211,12 +211,34 @@
 - 생기부 셀 직접 수정 = 새 버전 저장(origin='edited', `saveRecordEdit` 재사용 가능). 등급은 student_scores 스냅샷 + `lib/grading` 파생 표시.
 - 세션 8a의 records/prompt_profiles 행위 RLS pg 검증을 IPv6 복구 후 함께 수행. 새 마이그레이션은 `db push --db-url`.
 
-## (참고) 세션 8 원 골격 — 8a 완료, 8b 잔여
+## 세션 8b — 2026-07-10 (Phase 3 결과 표 UI + 레이아웃 저장) ✅ 완료
+
+- [x] 마이그레이션 `0009_ui_layouts.sql`: ui_layouts(user_id·project_id·layout jsonb·updated_at, **unique(user_id, project_id)**, FK cascade) + RLS(select/delete = user_id=auth.uid(), insert/update = +is_approved()) — **pooler 경유 원격 적용**·pg 스키마/제약/정책 검증 완료. (팩 0007→0009: 0007·0008 선점.)
+- [x] 순수 로직 `lib/records/layout.ts`: 타입(CellMode·ColumnKey·LayoutState) + `normalizeLayout`(열 너비 클램프·stale studentId 제거·기본값·garbage 방어)·`setAllCellModes`(전체 토글)·`withMode`·`clampColumnWidth`/`clampCellHeight`. 저장·복원 양쪽에서 동일 새니타이즈, 서버 saveLayout도 재정규화(신뢰 경계).
+- [x] 서버 액션 `results/actions.ts`: `saveLayout`(requireProjectOwner + ui_layouts upsert onConflict(user_id,project_id) + 서버 재정규화). 메모·생기부 편집은 세션 4 `saveTeacherMemo`·세션 8a `saveRecordEdit` 재사용(신규 액션 없음).
+- [x] 결과 표(`/projects/[id]/results`): 4열(학생 정보|등급|교사 메모|생기부), `table-fixed`+colgroup, 헤더 경계 드래그 열 너비 조절, 상단 전체 접기/펼치기 토글, 디바운스(700ms) 레이아웃 저장. 등급은 student_scores 스냅샷 + `computeStandings` 파생(INV-6, 미평가는 "미평가").
+- [x] 텍스트 셀(`text-cell.tsx`): 3모드(접기 1줄 말줄임 클릭 펼침 / 전체 맞춤 자동 높이 / 커스텀 핸들 드래그 높이), full·custom에서 편집(blur 저장), 행 단위 모드 토글. 생기부 셀 직접 수정 → `saveRecordEdit`로 새 'edited' 버전(내용 실변경 시 1회, 버전 남발 방지) + 로컬 버전·origin 배지 갱신. 생기부 셀에 글자수(프로젝트 카운트 방식) 표시.
+- [x] 배선: records 페이지 헤더에 "결과 표" 링크, 프로젝트 홈 Phase 3에 결과 표 링크. proxy.ts는 `/projects/*` approved 게이트가 이미 커버(수정 없음).
+- [x] 단위 테스트 `tests/layout.test.ts` 9건(normalizeLayout·setAllCellModes·withMode·clamp) — `npm test` **76건** 통과. typecheck·lint·build 통과.
+- [x] **수용 기준 검증**:
+  (1) 저장→복원: saveLayout upsert + 페이지 로드 normalizeLayout 복원. pg 행위(롤백 tx, 임시 프로젝트)로 소유자 upsert 1행·소유자 select 1행(복원)·타 계정 select 0행(격리)·타 계정 위조 insert 42501(차단) 실증. 앱-레벨 로그아웃/재로그인 e2e는 유효 세션 필요 — 저장·복원 경로·RLS는 DB로 증명.
+  (2) 셀 직접 수정: `saveRecordEdit`가 origin='edited'·version+1로 새 버전 저장(세션 8a에서 RLS·동작 검증 완료, 재사용). 빈 내용·무변경은 저장 안 함.
+  (3) 30명 렌더링: 일반 HTML 표 + 셀별 로컬 상태(키 입력이 30행 전체 리렌더 유발 안 함) — 구조적으로 보장.
+  (4) typecheck·lint·build·test 통과. INV-4 클라이언트 번들 스캔(service role·암호화 키 0건).
+- 특이사항: 팩 0007→**0009**(번호 정합), layout jsonb 형태·RLS is_approved 추가·셀 편집 재사용·pooler 적용 — 모두 DECISIONS 2026-07-10. **세션 8a에서 보류했던 records/prompt_profiles 행위 RLS는 8a 확장(2026-07-10)에서 pooler로 완료됨** — 8b 인계의 "IPv6 복구 후 함께 수행"은 이미 해소.
+
+## (참고) 세션 8 원 골격 — 8a·8b 완료
 
 - [x] 생기부 생성: 학생 1명 = 호출 1회(INV-1), 서버가 student_id 필터로 컨텍스트 조립(INV-2), sources 저장(INV-3), 버전 관리 — 세션 8a
 - [x] 검증 패스: 문장 단위 근거 판정 → 미근거 문장 하이라이트, 삭제/수정/재생성 선택 — 세션 8a
 - [x] 프롬프트 프로필: 참고/금지 2패널(분할바), 계정 기본+프로젝트 오버라이드, 시드 문체 기본값 — 세션 8a
 - [x] 예시 생기부 인제스트: diff 제안 → 교사 승인 항목만 반영 — 세션 8a
 - [x] 글자수 카운터 (제한 대비 실시간, 글자수/바이트 토글) — 세션 8a
-- [ ] 결과 표: 4열, 열 너비 드래그, 셀 3모드(접기/전체/커스텀), 행·전체 토글, 레이아웃 DB 저장·복원 — **세션 8b**
+- [x] 결과 표: 4열, 열 너비 드래그, 셀 3모드(접기/전체/커스텀), 행·전체 토글, 레이아웃 DB 저장·복원 — 세션 8b
 - [x] **수용 기준**: 생성 호출 페이로드에 타 학생 데이터가 포함될 수 있는 코드 경로가 없음, 검증 결과가 records.verification에 저장됨 — 세션 8a
+
+### 다음 세션(9) 인계
+
+- 세션 9 = 통합 QA + 불변조건 감사 + Vercel 배포 준비(원 팩 I절). 스모크 시나리오 전 구간·RLS 전수 점검(전 14테이블 타 계정 차단)·INVARIANTS_AUDIT.md(INV-1~6 보장 지점 코드 특정)·환경변수 체크리스트·README·시드 스크립트.
+- RLS 전수 점검 시 ui_layouts 포함. pooler 경유 pg 스크립트(스크래치, 미커밋) 재사용. `.env.local`의 SUPABASE_DB_URL은 직접 호스트(IPv6)라, pooler URL은 동일 비밀번호로 `postgres.<ref>@aws-1-ap-northeast-2.pooler.supabase.com:5432` 구성.
+- Phase 3 결과 표는 student_scores 스냅샷이 있어야 등급이 표시된다(Phase 2 채점 선행). 실 LLM 생성·채점은 유효 키가 있을 때 라이브 시연(비용 발생).

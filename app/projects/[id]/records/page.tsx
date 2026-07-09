@@ -88,12 +88,20 @@ export default async function RecordsPage({
         </Link>
         <div className="mt-3 flex items-center justify-between gap-3">
           <h1 className="text-2xl font-bold">생기부 생성</h1>
-          <Link
-            href={`/projects/${project.id}/profile`}
-            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            프롬프트 프로필
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/projects/${project.id}/results`}
+              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              결과 표
+            </Link>
+            <Link
+              href={`/projects/${project.id}/profile`}
+              className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              프롬프트 프로필
+            </Link>
+          </div>
         </div>
         <p className="mt-1 text-sm text-zinc-500">
           학생 한 명씩 격리 생성합니다. 반영된 제출물과 교사 관찰 메모에 근거한 내용만

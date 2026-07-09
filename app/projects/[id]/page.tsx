@@ -88,6 +88,16 @@ export default async function ProjectHomePage({
             href={`/projects/${project.id}/records`}
           />
         </ol>
+        <p className="mt-3 text-sm text-zinc-500">
+          생성한 뒤에는{" "}
+          <Link
+            href={`/projects/${project.id}/results`}
+            className="underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
+          >
+            결과 표
+          </Link>
+          에서 전체 학생의 등급·메모·생기부를 한 화면에서 열람·편집할 수 있습니다.
+        </p>
       </section>
     </main>
   );

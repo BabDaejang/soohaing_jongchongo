@@ -4,6 +4,7 @@
 // interface가 아닌 type 별칭으로 선언해야 한다.
 
 import type { ModelRouting } from "@/lib/llm/types";
+import type { LayoutState } from "@/lib/records/layout";
 
 export type ProfileRole = "admin" | "user";
 export type ProfileStatus = "pending" | "approved" | "rejected";
@@ -270,6 +271,16 @@ export type PromptProfileVersion = {
   created_at: string;
 };
 
+// ui_layouts (DATA_MODEL 13절, 세션 8b). 결과 표 레이아웃 저장 — (user_id, project_id)당 1행.
+// layout jsonb는 저장 시·읽을 때 항상 normalizeLayout으로 검증한다(신뢰 경계) → Row는 unknown.
+export type UiLayout = {
+  id: string;
+  user_id: string;
+  project_id: string;
+  layout: unknown;
+  updated_at: string;
+};
+
 // Supabase 클라이언트 제네릭용 스키마 타입.
 // profiles Insert는 never — 생성 경로는 auth 트리거(handle_new_user)뿐이다.
 export type Database = {
@@ -505,6 +516,18 @@ export type Database = {
           source: ProfileVersionSource;
         };
         Update: never;
+        Relationships: [];
+      };
+      // ui_layouts: 결과 표 레이아웃(세션 8b). RLS는 user_id = auth.uid()만. 디바운스 upsert.
+      ui_layouts: {
+        Row: UiLayout;
+        Insert: {
+          user_id: string;
+          project_id: string;
+          layout: LayoutState;
+          updated_at?: string;
+        };
+        Update: Partial<{ layout: LayoutState; updated_at: string }>;
         Relationships: [];
       };
     };
