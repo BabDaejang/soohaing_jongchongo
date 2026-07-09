@@ -231,6 +231,7 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | project_id | uuid | FK → projects(id) on delete cascade, **NULL 허용** | NULL = 계정 기본 프로필, NOT NULL = 프로젝트 오버라이드 |
 | guidelines | jsonb | not null default '[]' | 작성 참고사항 목록: `[{id, text}]` |
 | prohibitions | jsonb | not null default '[]' | 금지사항 목록: `[{id, text}]` |
+| version | integer | not null default 1 | 저장/예시반영/가져오기/복원 시 +1 (세션 8a 확장, 0008). 화면에 버전·`updated_at` 표시 |
 | created_at / updated_at | timestamptz | | |
 
 - 세션 8a 마이그레이션 `0007_records_profiles.sql`. 팩의 `guidance`는 DATA_MODEL의 `guidelines`로 정합 (DECISIONS 2026-07-09).
@@ -239,6 +240,24 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 - 계층 병합(`lib/records/profile.ts` `mergeProfileLayers`): 계정 기본(base) → 프로젝트 오버라이드(우선, 뒤에 적용). 배치·UI 공용 순수 함수.
 - 예시 생기부 인제스트: LLM diff 제안은 저장하지 않고(`analyzeExample` 쓰기 없음) UI 상태로만, 교사 승인 항목만 `applyProfileSuggestions`가 반영 (자동 반영 금지).
 - **RLS**: `owner_id = auth.uid()`만(select/insert/update/delete 4정책, 쓰기는 +승인).
+
+## 12-1. prompt_profile_versions — 프롬프트 프로필 이력 (세션 8a 확장, 0008, append-only)
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| id | uuid | PK | |
+| profile_id | uuid | not null, FK → prompt_profiles(id) on delete cascade | 어느 프로필 행의 이력인지 |
+| owner_id | uuid | not null, FK → profiles(id) on delete cascade | RLS 단순화용 비정규화(auth.uid() 비교) |
+| project_id | uuid | FK → projects(id) on delete cascade, NULL 허용 | NULL = 계정 기본 |
+| version | integer | not null | unique `(profile_id, version)` |
+| guidelines / prohibitions | jsonb | not null | 저장 시점 스냅샷 |
+| source | text | not null, check in ('seed','edit','ingest','import','restore') | 이력 출처 |
+| created_at | timestamptz | not null default now() | |
+
+- 저장/예시반영/가져오기/복원(`saveProfileLayer`) 시 `prompt_profiles.version`을 올리고 이 테이블에 스냅샷 1행을 남긴다. 복원=과거 스냅샷 항목을 새 버전으로 저장(이력 삭제 없음).
+- MD 내보내기/가져오기: `lib/records/profile-markdown.ts`(순수 render/parse). 가져오기는 서버가 재파싱(신뢰 경계) 후 반영.
+- **RLS**: `owner_id = auth.uid()` select + insert(+승인). update/delete 정책 없음(append-only).
+- 사용자 요청 확장(SPEC 7.5, DECISIONS 2026-07-10).
 
 ## 13. ui_layouts — 결과 표 레이아웃 저장
 

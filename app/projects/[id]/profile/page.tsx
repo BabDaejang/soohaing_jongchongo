@@ -6,9 +6,19 @@ import { ProfileEditor } from "@/components/projects/profile/profile-editor";
 import { ExampleIngest } from "@/components/projects/profile/example-ingest";
 import type { ProfileItem } from "@/lib/supabase/types";
 
-type LayerItems = { guidelines: ProfileItem[]; prohibitions: ProfileItem[] };
+type LayerItems = {
+  guidelines: ProfileItem[];
+  prohibitions: ProfileItem[];
+  version: number;
+  updatedAt: string | null;
+};
 
-const EMPTY: LayerItems = { guidelines: [], prohibitions: [] };
+const EMPTY: LayerItems = {
+  guidelines: [],
+  prohibitions: [],
+  version: 0,
+  updatedAt: null,
+};
 
 // 프롬프트 프로필 화면 (SPEC 7.5). 계정 기본 + 프로젝트 오버라이드 통합 편집 + 예시 인제스트.
 export default async function ProfilePage({
@@ -36,7 +46,7 @@ export default async function ProfilePage({
   // 본인 소유 프로필만 RLS로 조회된다(owner_id = auth.uid()).
   const { data: profiles } = await supabase
     .from("prompt_profiles")
-    .select("project_id, guidelines, prohibitions")
+    .select("project_id, guidelines, prohibitions, version, updated_at")
     .eq("owner_id", user.id)
     .or(`project_id.is.null,project_id.eq.${id}`);
 
@@ -47,12 +57,16 @@ export default async function ProfilePage({
     ? {
         guidelines: accountRow.guidelines as ProfileItem[],
         prohibitions: accountRow.prohibitions as ProfileItem[],
+        version: accountRow.version,
+        updatedAt: accountRow.updated_at,
       }
     : EMPTY;
   const projectItems: LayerItems = projectRow
     ? {
         guidelines: projectRow.guidelines as ProfileItem[],
         prohibitions: projectRow.prohibitions as ProfileItem[],
+        version: projectRow.version,
+        updatedAt: projectRow.updated_at,
       }
     : EMPTY;
 

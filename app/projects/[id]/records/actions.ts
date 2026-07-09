@@ -20,10 +20,12 @@ import { buildVerificationMessages } from "@/lib/prompts/verification";
 import { buildExampleAnalysisMessages } from "@/lib/prompts/example-ingest";
 import { parseVerification, countUnsupported } from "@/lib/records/verification";
 import { parseSuggestions, type ProfileSuggestion } from "@/lib/records/suggestions";
+import { parseProfileMarkdown } from "@/lib/records/profile-markdown";
 import { SEED_GUIDELINES, SEED_PROHIBITIONS } from "@/lib/prompts/seed-profile";
 import type {
   Database,
   ProfileItem,
+  ProfileVersionSource,
   RecordOrigin,
   VerificationSentence,
 } from "@/lib/supabase/types";
@@ -322,36 +324,63 @@ async function loadLayerItems(
   };
 }
 
-async function upsertLayer(
+// 프로필 저장 + 버전 증가 + 이력 스냅샷(세션 8a 확장). source로 이력 출처를 기록한다.
+async function saveProfileLayer(
   supabase: Client,
   ownerId: string,
   target: ProfileTarget,
   projectId: string,
   guidelines: ProfileItem[],
   prohibitions: ProfileItem[],
-): Promise<void> {
+  source: ProfileVersionSource,
+): Promise<{ profileId: string; version: number }> {
   const pid = target === "account" ? null : projectId;
   const finder = supabase
     .from("prompt_profiles")
-    .select("id")
+    .select("id, version")
     .eq("owner_id", ownerId);
   const { data: existing } =
     pid === null
       ? await finder.is("project_id", null).maybeSingle()
       : await finder.eq("project_id", pid).maybeSingle();
 
+  let profileId: string;
+  let version: number;
   if (existing) {
+    version = existing.version + 1;
     const { error } = await supabase
       .from("prompt_profiles")
-      .update({ guidelines, prohibitions })
+      .update({ guidelines, prohibitions, version })
       .eq("id", existing.id);
     if (error) throw new Error(error.message);
+    profileId = existing.id;
   } else {
-    const { error } = await supabase
+    version = 1;
+    const { data: inserted, error } = await supabase
       .from("prompt_profiles")
-      .insert({ owner_id: ownerId, project_id: pid, guidelines, prohibitions });
-    if (error && error.code !== UNIQUE_VIOLATION) throw new Error(error.message);
+      .insert({ owner_id: ownerId, project_id: pid, guidelines, prohibitions, version })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    profileId = inserted.id;
   }
+
+  // 이력 스냅샷(append-only). 실패해도 현재 상태는 일관되므로 로깅만 한다.
+  const { error: histErr } = await supabase
+    .from("prompt_profile_versions")
+    .insert({
+      profile_id: profileId,
+      owner_id: ownerId,
+      project_id: pid,
+      version,
+      guidelines,
+      prohibitions,
+      source,
+    });
+  if (histErr) {
+    console.error("prompt_profile_versions 기록 실패:", histErr.message);
+  }
+  return { profileId, version };
 }
 
 // 계정 최초 접근 시 계정 기본 프로필을 시드한다(없을 때만 — 자동 반영 아님, 문체 기본값 로드).
@@ -365,14 +394,31 @@ export async function ensureDefaultProfile(): Promise<void> {
     .is("project_id", null)
     .maybeSingle();
   if (data) return;
-  const { error } = await supabase.from("prompt_profiles").insert({
+  const { data: inserted, error } = await supabase
+    .from("prompt_profiles")
+    .insert({
+      owner_id: userId,
+      project_id: null,
+      guidelines: SEED_GUIDELINES,
+      prohibitions: SEED_PROHIBITIONS,
+      version: 1,
+    })
+    .select("id")
+    .single();
+  if (error) {
+    // 동시 요청으로 이미 생성됐다면 무시(partial unique).
+    if (error.code === UNIQUE_VIOLATION) return;
+    throw new Error(error.message);
+  }
+  await supabase.from("prompt_profile_versions").insert({
+    profile_id: inserted.id,
     owner_id: userId,
     project_id: null,
+    version: 1,
     guidelines: SEED_GUIDELINES,
     prohibitions: SEED_PROHIBITIONS,
+    source: "seed",
   });
-  // 동시 요청으로 이미 생성됐다면 무시(partial unique).
-  if (error && error.code !== UNIQUE_VIOLATION) throw new Error(error.message);
 }
 
 export async function saveProfileItems(
@@ -382,13 +428,14 @@ export async function saveProfileItems(
   prohibitions: ProfileItem[],
 ): Promise<void> {
   const { userId, supabase } = await requireProjectOwner(projectId);
-  await upsertLayer(
+  await saveProfileLayer(
     supabase,
     userId,
     target,
     projectId,
     sanitizeItems(guidelines),
     sanitizeItems(prohibitions),
+    "edit",
   );
   revalidatePath(`/projects/${projectId}/profile`);
 }
@@ -440,13 +487,111 @@ export async function applyProfileSuggestions(
     }
   }
 
-  await upsertLayer(
+  await saveProfileLayer(
     supabase,
     userId,
     target,
     projectId,
     guidelines,
     prohibitions,
+    "ingest",
   );
   revalidatePath(`/projects/${projectId}/profile`);
+}
+
+// ── 프로필 MD 가져오기·버전 이력·복원 (세션 8a 확장) ────────────────────
+// 편집한 Markdown을 파싱해 반영한다(서버에서 재파싱 — 신뢰 경계). source='import'.
+export async function importProfileFromMarkdown(
+  projectId: string,
+  target: ProfileTarget,
+  markdown: string,
+): Promise<{ version: number; guidelines: number; prohibitions: number }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const parsed = parseProfileMarkdown(markdown);
+  const guidelines = sanitizeItems(parsed.guidelines);
+  const prohibitions = sanitizeItems(parsed.prohibitions);
+  if (guidelines.length === 0 && prohibitions.length === 0) {
+    throw new Error("가져올 항목을 찾지 못했습니다. 형식을 확인하세요.");
+  }
+  const { version } = await saveProfileLayer(
+    supabase,
+    userId,
+    target,
+    projectId,
+    guidelines,
+    prohibitions,
+    "import",
+  );
+  revalidatePath(`/projects/${projectId}/profile`);
+  return { version, guidelines: guidelines.length, prohibitions: prohibitions.length };
+}
+
+export type ProfileVersionRow = {
+  version: number;
+  source: ProfileVersionSource;
+  created_at: string;
+  guidelines: ProfileItem[];
+  prohibitions: ProfileItem[];
+};
+
+async function findProfileId(
+  supabase: Client,
+  ownerId: string,
+  target: ProfileTarget,
+  projectId: string,
+): Promise<string | null> {
+  const pid = target === "account" ? null : projectId;
+  const finder = supabase
+    .from("prompt_profiles")
+    .select("id")
+    .eq("owner_id", ownerId);
+  const { data } =
+    pid === null
+      ? await finder.is("project_id", null).maybeSingle()
+      : await finder.eq("project_id", pid).maybeSingle();
+  return data?.id ?? null;
+}
+
+export async function listProfileVersions(
+  projectId: string,
+  target: ProfileTarget,
+): Promise<ProfileVersionRow[]> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const profileId = await findProfileId(supabase, userId, target, projectId);
+  if (!profileId) return [];
+  const { data } = await supabase
+    .from("prompt_profile_versions")
+    .select("version, source, created_at, guidelines, prohibitions")
+    .eq("profile_id", profileId)
+    .order("version", { ascending: false });
+  return (data ?? []) as ProfileVersionRow[];
+}
+
+// 과거 버전으로 복원 = 그 스냅샷의 항목을 새 버전으로 저장(이력 삭제 없음). source='restore'.
+export async function restoreProfileVersion(
+  projectId: string,
+  target: ProfileTarget,
+  version: number,
+): Promise<{ version: number }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const profileId = await findProfileId(supabase, userId, target, projectId);
+  if (!profileId) throw new Error("프로필을 찾을 수 없습니다.");
+  const { data: snap } = await supabase
+    .from("prompt_profile_versions")
+    .select("guidelines, prohibitions")
+    .eq("profile_id", profileId)
+    .eq("version", version)
+    .maybeSingle();
+  if (!snap) throw new Error("해당 버전을 찾을 수 없습니다.");
+  const res = await saveProfileLayer(
+    supabase,
+    userId,
+    target,
+    projectId,
+    snap.guidelines as ProfileItem[],
+    snap.prohibitions as ProfileItem[],
+    "restore",
+  );
+  revalidatePath(`/projects/${projectId}/profile`);
+  return { version: res.version };
 }

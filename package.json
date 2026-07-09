@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "node --conditions=react-server --import tsx --test tests/crypto.test.ts tests/resolve-api-key.test.ts tests/model-routing.test.ts tests/parsing.test.ts tests/vision-content.test.ts tests/matching.test.ts tests/retention.test.ts tests/grading.test.ts tests/scoring.test.ts tests/text-count.test.ts tests/prompt-profile.test.ts tests/verification.test.ts tests/record-context.test.ts"
+    "test": "node --conditions=react-server --import tsx --test tests/crypto.test.ts tests/resolve-api-key.test.ts tests/model-routing.test.ts tests/parsing.test.ts tests/vision-content.test.ts tests/matching.test.ts tests/retention.test.ts tests/grading.test.ts tests/scoring.test.ts tests/text-count.test.ts tests/prompt-profile.test.ts tests/verification.test.ts tests/record-context.test.ts tests/profile-markdown.test.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.0",

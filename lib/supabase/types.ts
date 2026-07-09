@@ -245,8 +245,29 @@ export type PromptProfile = {
   project_id: string | null; // NULL = 계정 기본 프로필
   guidelines: ProfileItem[]; // 작성 참고사항
   prohibitions: ProfileItem[]; // 금지사항
+  version: number; // 저장/예시반영/가져오기/복원 시 +1 (세션 8a 확장)
   created_at: string;
   updated_at: string | null;
+};
+
+// prompt_profile_versions (세션 8a 확장, 0008). 프로필 스냅샷 이력(append-only).
+export type ProfileVersionSource =
+  | "seed"
+  | "edit"
+  | "ingest"
+  | "import"
+  | "restore";
+
+export type PromptProfileVersion = {
+  id: string;
+  profile_id: string;
+  owner_id: string;
+  project_id: string | null;
+  version: number;
+  guidelines: ProfileItem[];
+  prohibitions: ProfileItem[];
+  source: ProfileVersionSource;
+  created_at: string;
 };
 
 // Supabase 클라이언트 제네릭용 스키마 타입.
@@ -464,8 +485,26 @@ export type Database = {
           project_id?: string | null;
           guidelines?: ProfileItem[];
           prohibitions?: ProfileItem[];
+          version?: number;
         };
-        Update: Partial<Pick<PromptProfile, "guidelines" | "prohibitions">>;
+        Update: Partial<
+          Pick<PromptProfile, "guidelines" | "prohibitions" | "version">
+        >;
+        Relationships: [];
+      };
+      // prompt_profile_versions: 프로필 이력 스냅샷(append-only). insert는 소유자 세션.
+      prompt_profile_versions: {
+        Row: PromptProfileVersion;
+        Insert: {
+          profile_id: string;
+          owner_id: string;
+          project_id?: string | null;
+          version: number;
+          guidelines: ProfileItem[];
+          prohibitions: ProfileItem[];
+          source: ProfileVersionSource;
+        };
+        Update: never;
         Relationships: [];
       };
     };

@@ -191,11 +191,20 @@
   (4) 프로필 계층 계정→오버라이드 적용 순서·태그 — 단위 테스트.
   (5) 예시 인제스트 analyze(무쓰기)/apply(승인분만) 분리로 교사 승인 없이 프로필 불변.
   (6) typecheck·lint·build·test 통과. INV-4 클라이언트 번들 스캔(service role 키·서버 전용 마커·api-key 헤더 0건).
-- 특이사항: 팩 0006→**0007**(0006 선점), edited_by_teacher→origin('edited'), guidance→guidelines, sources uuid[], verification에 grounded_by_memo/teacher_edited 확장, SEED_PROFILE 신설(원 팩 L절 미확보) — 모두 DECISIONS 2026-07-09. **records/prompt_profiles의 행위(cross-account) pg 테스트는 이번 세션 중 직접 Postgres 호스트(IPv6 전용)의 라우팅 불가(ENETUNREACH)로 보류** — 구조적 RLS(정책 qual/with_check: generated는 authenticated insert 정책에서 제외, select는 owns_project)는 pg로 확정, 정책 의미가 행위를 보장. IPv6 복구 시 재확인 권장(세션 9 RLS 전수 점검 포함). 실 LLM 생성·검증은 비용 발생 → 호출·파싱·저장 경로는 단위 테스트+구조로 증명, 유효 키 존재 시 라이브 시연.
+- 특이사항: 팩 0006→**0007**(0006 선점), edited_by_teacher→origin('edited'), guidance→guidelines, sources uuid[], verification에 grounded_by_memo/teacher_edited 확장, SEED_PROFILE 신설(원 팩 L절 미확보) — 모두 DECISIONS 2026-07-09. **records/prompt_profiles의 행위(cross-account) pg 테스트는 직접 Postgres 호스트(IPv6 전용)의 라우팅 불가(ENETUNREACH)로 보류** — 구조적 RLS(정책 qual/with_check: generated는 authenticated insert 정책에서 제외, select는 owns_project)는 pg로 확정, 정책 의미가 행위를 보장. IPv6 복구 시 재확인 권장(세션 9 RLS 전수 점검 포함). 실 LLM 생성·검증은 비용 발생 → 호출·파싱·저장 경로는 단위 테스트+구조로 증명, 유효 키 존재 시 라이브 시연.
+
+### 세션 8a 확장 — 프롬프트 프로필 버전·이력·MD 입출력 (2026-07-10, 사용자 요청·승인) ✅ 완료(코드), ⏳ 마이그레이션 적용 대기
+
+- [x] 사용자 요청: "권장/금지 항목이 md로 저장돼 편하게 확인·편집되고, 업데이트 시 버전·날짜시간 표시". 분석 결과 라이브 프로필을 repo MD로 두는 방식은 Vercel(읽기 전용 FS)·다중 사용자·RLS와 충돌 → **DB 단일 진실 원천 + 버전/날짜시간 + MD 내보내기/가져오기 + 이력·복원**으로 구현. SPEC 7.5 확장(승인)·DECISIONS 2026-07-10 기록. **8b 계획은 영향 없음**(결과 표와 무관).
+- [x] 마이그레이션 SQL `0008_prompt_profile_versions.sql` 작성: `prompt_profiles.version int default 1` + `prompt_profile_versions`(스냅샷 이력, source seed/edit/ingest/import/restore, append-only) + RLS(owner-only).
+- [x] `saveProfileLayer`(저장 시 version+1 + 이력 스냅샷), `importProfileFromMarkdown`(서버 재파싱), `listProfileVersions`·`restoreProfileVersion`(복원=새 버전). `lib/records/profile-markdown.ts`(순수 render/parse). ProfileEditor에 버전·날짜 표시·MD 내보내기·가져오기(미리보기)·버전 이력·복원 UI.
+- [x] 단위 테스트 `tests/profile-markdown.test.ts`(render/parse 왕복·번호·불릿·(없음)·섹션밖 무시) — `npm test` **62건** 통과. typecheck·lint·build 통과.
+- [ ] ⏳ **마이그레이션 0008 원격 적용 보류**: IPv6 전용 직접 DB 호스트가 이번 작업 시간 내내 라우팅 불가(ENETUNREACH)로 `supabase db push` 실패. **SQL 파일은 커밋되어 있어 연결 복구 시 `db push`로 즉시 적용**된다(현재 로컬/dev, 실사용자 없음). 적용 후 pg로 스키마·RLS 확인 필요.
 
 ### 다음 세션(8b) 인계
 
-- 세션 8b = Phase 3 결과 표 UI(SPEC 8절). 마이그레이션 `0008_ui_layouts.sql`(ui_layouts, (user_id, project_id) 유니크, layout jsonb) + RLS.
+- 세션 8b = Phase 3 결과 표 UI(SPEC 8절). 마이그레이션 **`0009_ui_layouts.sql`**(ui_layouts, (user_id, project_id) 유니크, layout jsonb) + RLS. (0008은 8a 확장의 prompt_profile_versions가 사용 — 세션 시작 시 최신 번호 확인.)
+- **선행 확인**: IPv6 복구 후 `0008_prompt_profile_versions.sql` 원격 적용(`db push`) + pg 검증이 아직이면 먼저 수행.
 - 결과 표 4열(학생 정보|등급|교사 메모|생기부), 열 너비 드래그, 셀 3모드(접기/전체/커스텀 높이), 행·전체 토글, 레이아웃 (user_id, project_id) DB 저장(디바운스)·복원.
 - 생기부 셀 직접 수정 = 새 버전 저장(origin='edited', `saveRecordEdit` 재사용 가능). 등급은 student_scores 스냅샷 + `lib/grading` 파생 표시.
 - 세션 8a의 records/prompt_profiles 행위 RLS pg 검증을 IPv6 복구 후 함께 수행. 새 마이그레이션은 `db push --db-url`.
