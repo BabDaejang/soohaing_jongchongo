@@ -201,6 +201,7 @@
 - [x] 단위 테스트 `tests/profile-markdown.test.ts`(render/parse 왕복·번호·불릿·(없음)·섹션밖 무시) — `npm test` **62건** 통과. typecheck·lint·build 통과.
 - [x] **마이그레이션 0008 원격 적용 완료(2026-07-10)**: 직접 호스트(IPv6 전용) 라우팅 불가가 지속되어 **IPv4 pooler(`aws-1-ap-northeast-2.pooler.supabase.com:5432`, 세션 모드, user `postgres.<ref>`)로 `db push` 성공**. pg(pooler 경유)로 스키마 검증: version 컬럼·ppv 9컬럼·unique(profile_id,version)·정책 select+insert만(append-only) 확인.
 - [x] **8a에서 보류했던 RLS 행위 테스트 완료(2026-07-10, pooler 경유)**: records — 소유자 세션 generated insert 42501 거부(INV-3)·edited insert 허용·소유자 select 가능·타 계정 select 0행·타 계정 insert 42501 거부·service role generated 허용. prompt_profiles/ppv — 소유자 insert 허용·타 계정 select 0행·ppv update 0행(append-only). 승인 사용자가 1명뿐이라 타 계정은 임의 uuid JWT 클레임으로 시뮬레이션(정책이 owner/owns_project 비교만 하므로 유효).
+- [x] **예시 생기부 파일 업로드(2026-07-10, 사용자 지시)**: txt/md/docx/pdf(텍스트 레이어)/xlsx/csv 파일 → 서버 추출(`lib/records/example-file.ts`, 세션 5 파서 재사용) → 입력창 채움 → 교사 확인 후 기존 분석→diff 승인→반영 파이프라인. hwp·스캔 PDF는 명시적 안내 에러. next.config serverActions bodySizeLimit 10mb(파일 상한 8MB). 단위 테스트 5건 추가 — `npm test` **67건** 통과.
 
 ### 다음 세션(8b) 인계
 

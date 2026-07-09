@@ -21,6 +21,7 @@ import { buildExampleAnalysisMessages } from "@/lib/prompts/example-ingest";
 import { parseVerification, countUnsupported } from "@/lib/records/verification";
 import { parseSuggestions, type ProfileSuggestion } from "@/lib/records/suggestions";
 import { parseProfileMarkdown } from "@/lib/records/profile-markdown";
+import { extractTextFromExampleFile } from "@/lib/records/example-file";
 import { SEED_GUIDELINES, SEED_PROHIBITIONS } from "@/lib/prompts/seed-profile";
 import type {
   Database,
@@ -438,6 +439,20 @@ export async function saveProfileItems(
     "edit",
   );
   revalidatePath(`/projects/${projectId}/profile`);
+}
+
+// 예시 파일 → 분석용 텍스트 추출 (세션 8a 확장, 사용자 지시). 추출만 하고 쓰지 않는다 —
+// 추출 텍스트는 입력창에 채워져 교사가 확인한 뒤 분석(analyzeExample)으로 이어진다.
+export async function extractExampleText(
+  projectId: string,
+  formData: FormData,
+): Promise<{ text: string; filename: string }> {
+  await requireProjectOwner(projectId);
+  const file = formData.get("file");
+  if (!(file instanceof File)) throw new Error("파일이 없습니다.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const text = await extractTextFromExampleFile(file.name, bytes);
+  return { text, filename: file.name };
 }
 
 // 예시 인제스트: 분석만 한다(쓰기 없음). 제안은 UI 상태로만 표시된다(자동 반영 금지 — 수용 5).

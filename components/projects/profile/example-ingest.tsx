@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   analyzeExample,
   applyProfileSuggestions,
+  extractExampleText,
 } from "@/app/projects/[id]/records/actions";
 import type { ProfileSuggestion } from "@/lib/records/suggestions";
 
@@ -21,6 +22,27 @@ export function ExampleIngest({ projectId }: { projectId: string }) {
   const [pending, startTransition] = useTransition();
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // 파일 → 서버 추출(txt/md/docx/pdf/xlsx/csv) → 입력창에 채움. 교사가 확인 후 분석.
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // 같은 파일 재선택 허용
+    if (!file) return;
+    setError(null);
+    setMsg(null);
+    setRows(null);
+    startTransition(async () => {
+      try {
+        const fd = new FormData();
+        fd.set("file", file);
+        const r = await extractExampleText(projectId, fd);
+        setText(r.text);
+        setMsg(`'${r.filename}'에서 ${r.text.length.toLocaleString()}자 추출 — 내용 확인 후 분석하세요.`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "파일 추출 실패");
+      }
+    });
+  }
 
   function analyze() {
     setError(null);
@@ -63,8 +85,9 @@ export function ExampleIngest({ projectId }: { projectId: string }) {
     <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
       <h2 className="text-sm font-semibold">예시 생기부로 프로필 다듬기</h2>
       <p className="mt-1 text-xs text-zinc-500">
-        좋은 예시 텍스트를 붙여넣으면 참고/금지 항목 제안을 만듭니다. 승인한 항목만
-        프로필에 반영됩니다(자동 반영 없음).
+        좋은 예시를 파일(txt·md·docx·pdf·xlsx·csv)로 올리거나 텍스트를 붙여넣으면
+        참고/금지 항목 제안을 만듭니다. 승인한 항목만 프로필에 반영됩니다(자동 반영
+        없음). 한글(hwp) 파일은 PDF/docx로 저장 후 업로드하세요.
       </p>
 
       <div className="mt-3 flex items-center gap-2">
@@ -87,11 +110,22 @@ export function ExampleIngest({ projectId }: { projectId: string }) {
         </div>
       </div>
 
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          type="file"
+          accept=".txt,.md,.docx,.pdf,.xlsx,.csv"
+          onChange={onFile}
+          disabled={pending}
+          className="text-xs"
+        />
+        {pending && <span className="text-xs text-zinc-400">추출 중…</span>}
+      </div>
+
       <textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
         rows={5}
-        placeholder="좋은 생기부 예시 텍스트를 붙여넣으세요."
+        placeholder="좋은 생기부 예시 텍스트를 붙여넣거나 위에서 파일을 선택하세요."
         className="mt-2 w-full resize-y rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
       />
 
