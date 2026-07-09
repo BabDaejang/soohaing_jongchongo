@@ -18,7 +18,9 @@ export default async function StudentsPage({
     supabase.from("projects").select("id, name").eq("id", id).maybeSingle(),
     supabase
       .from("students")
-      .select("id, project_id, student_number, name, teacher_memo, created_at, updated_at")
+      .select(
+        "id, project_id, student_number, name, teacher_memo, score_override, override_reason, created_at, updated_at",
+      )
       .eq("project_id", id)
       .order("student_number", { ascending: true, nullsFirst: false })
       .order("name", { ascending: true }),

@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SettingsForm } from "@/components/projects/settings-form";
+import { ModelRoutingForm } from "@/components/projects/model-routing-form";
 
 // 프로젝트 설정 화면 (SPEC 4절). 저장→revalidate로 재로드 왕복.
 export default async function ProjectSettingsPage({
@@ -12,13 +13,16 @@ export default async function ProjectSettingsPage({
   const { id } = await params;
   const supabase = await createClient();
 
-  const { data: project } = await supabase
-    .from("projects")
-    .select(
-      "id, name, grading_scheme, char_limit, count_method, score_aggregation, tie_break, file_retention_days",
-    )
-    .eq("id", id)
-    .maybeSingle();
+  const [{ data: project }, { data: providers }] = await Promise.all([
+    supabase
+      .from("projects")
+      .select(
+        "id, name, grading_scheme, char_limit, count_method, score_aggregation, tie_break, file_retention_days, model_routing",
+      )
+      .eq("id", id)
+      .maybeSingle(),
+    supabase.from("providers").select("id, name, api_format").order("name"),
+  ]);
   if (!project) notFound();
 
   return (
@@ -37,6 +41,14 @@ export default async function ProjectSettingsPage({
       </header>
 
       <SettingsForm project={project} />
+
+      <div className="mt-8">
+        <ModelRoutingForm
+          projectId={project.id}
+          routing={project.model_routing}
+          providers={providers ?? []}
+        />
+      </div>
     </main>
   );
 }

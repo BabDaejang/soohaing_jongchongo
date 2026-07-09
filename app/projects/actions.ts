@@ -9,6 +9,7 @@ import { requireProjectOwner } from "@/lib/projects";
 import { buildDefaultModelRouting } from "@/lib/llm/routing";
 import type {
   CountMethod,
+  Database,
   FileRetentionDays,
   GradingScheme,
   RubricCriterion,
@@ -151,17 +152,29 @@ export async function updateProjectSettings(formData: FormData) {
     throw new Error("원본 자동 삭제 정책 값이 올바르지 않습니다.");
   }
 
-  const { error } = await supabase
+  // 합성/동점 방식이 바뀌면 합성 점수·순위·등급이 달라지므로 "재계산 필요"를 표시한다
+  // (grading_scheme은 파생 표시라 재계산 불필요 — 화면 즉시 반영). 세션 7, DECISIONS 2026-07-09.
+  const { data: current } = await supabase
     .from("projects")
-    .update({
-      grading_scheme,
-      count_method,
-      score_aggregation,
-      tie_break,
-      char_limit,
-      file_retention_days,
-    })
-    .eq("id", projectId);
+    .select("score_aggregation, tie_break")
+    .eq("id", projectId)
+    .maybeSingle();
+  const scoringChanged =
+    !!current &&
+    (current.score_aggregation !== score_aggregation ||
+      current.tie_break !== tie_break);
+
+  const patch: Database["public"]["Tables"]["projects"]["Update"] = {
+    grading_scheme,
+    count_method,
+    score_aggregation,
+    tie_break,
+    char_limit,
+    file_retention_days,
+  };
+  if (scoringChanged) patch.needs_recalc = true;
+
+  const { error } = await supabase.from("projects").update(patch).eq("id", projectId);
   if (error) throw new Error(error.message);
 
   revalidatePath(`/projects/${projectId}`);

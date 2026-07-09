@@ -75,6 +75,7 @@ export default async function ProjectHomePage({
             step={2}
             title="Phase 2 · 평가"
             desc="루브릭 기준으로 제출물을 채점하고, 합성 점수·순위·상대평가 등급을 파생합니다. 등급은 직접 수정하지 않고 점수에서 계산됩니다."
+            href={`/projects/${project.id}/evaluate`}
           />
           <PhaseCard
             step={3}

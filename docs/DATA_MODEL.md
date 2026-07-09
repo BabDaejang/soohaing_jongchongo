@@ -100,7 +100,7 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | tie_break | text | not null, check in ('best_grade','mid_rank'), default 'best_grade' | 동점자 처리 (best_grade = 상위 등급 부여) |
 | file_retention_days | integer | check in (null 또는 7, 30) | NULL = 자동 삭제 끄기(기본) |
 | model_routing | jsonb | not null (**SQL default 없음** — 앱이 조립 삽입) | `{extract, evaluate, generate, verify}` → `{provider_id, model}`. 기본: extract=claude-haiku-4-5, 나머지=claude-sonnet-4-6. 컬럼 default가 providers 시드 id를 서브쿼리로 참조할 수 없어, `createProject`가 `buildDefaultModelRouting()`으로 조립해 삽입 (DECISIONS 2026-07-08) |
-| needs_recalc | boolean | not null default false | 신규 제출물·체크박스 변경 시 true → "재계산 필요" 배지 (SPEC 6절). **세션 7 마이그레이션에서 추가** — Phase 2 전용, 세션 4엔 소비처 없음 (DECISIONS 2026-07-08) |
+| needs_recalc | boolean | not null default false | 신규 제출물·체크박스 변경 시 true → "재계산 필요" 배지 (SPEC 6절). **세션 7 마이그레이션에서 추가** — Phase 2 전용, 세션 4엔 소비처 없음 (DECISIONS 2026-07-08). 설정(true)은 **DB 트리거**(submissions insert/delete/관련 update, rubrics.criteria 변경)와 설정 변경(score_aggregation/tie_break) 시, 해제(false)는 서버 재계산 배치가 담당 (세션 7, DECISIONS 2026-07-09) |
 | created_at / updated_at | timestamptz | | |
 
 - **RLS**(세션 4 마이그레이션 0003): select = 소유자 or admin(전체 열람), insert/update = 소유자 and 승인됨, delete = 소유자. 교사 간 공유 기능은 스펙에 없으므로 없음.
@@ -175,12 +175,14 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | project_id | uuid | not null, FK → projects(id) on delete cascade | 조회 편의 + RLS |
 | scores | jsonb | not null | 기준별: `[{criterion_id, score, evidence_quote}]` — 근거 인용 필수 (SPEC 6절) |
 | total_score | numeric | not null | 기준 점수 합산 (루브릭 배점 기준) |
+| content_hash | text | not null | 채점 당시 제출물 content_hash 스냅샷 — 증분 재평가 판정용. **세션 7 도입** (DECISIONS 2026-07-09) |
 | raw_llm_output | text | not null | 감사용 LLM 원문 출력 보관 |
 | model | text | not null | 사용 모델 식별자 |
 | is_current | boolean | not null default true | 재채점 시 이전 행 false — 이력 보존 |
 | created_at | timestamptz | not null default now() | |
 
 - 재채점은 update가 아닌 insert (감사 이력). `(submission_id, is_current=true)` partial unique.
+- **증분 재평가**(세션 7, 수용 5): 현재 평가(is_current)의 `content_hash`가 제출물의 현재 `content_hash`와 같으면 재채점을 건너뛴다. 다르거나 현재 평가가 없으면 새로 채점. 반영 체크박스만 바뀐 경우(content_hash 불변)는 재채점하지 않는다.
 - **RLS**: 프로젝트 소유자 select만. **insert/update는 서버(service role) 전용** — 채점 결과는 클라이언트가 위조할 수 없다.
 
 ## 10. student_scores — 학생별 합성 점수·순위·등급 (INV-6)

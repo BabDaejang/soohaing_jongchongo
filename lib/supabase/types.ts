@@ -79,6 +79,7 @@ export type Project = {
   tie_break: TieBreak;
   file_retention_days: FileRetentionDays;
   model_routing: ModelRouting;
+  needs_recalc: boolean; // "재계산 필요" 배지 (세션 7). 트리거·설정 변경 시 true, 배치가 false.
   created_at: string;
   updated_at: string | null;
 };
@@ -112,12 +113,15 @@ export type Rubric = {
 };
 
 // students (DATA_MODEL 7절). score_override/override_reason는 세션 7에서 추가.
+// 교사 개입(순위 재배치)은 이 override로만 — 등급 직접 수정 없음(INV-6). 사유 필수(DB check).
 export type Student = {
   id: string;
   project_id: string;
   student_number: string | null;
   name: string;
   teacher_memo: string | null;
+  score_override: number | null;
+  override_reason: string | null;
   created_at: string;
   updated_at: string | null;
 };
@@ -167,6 +171,38 @@ export type Submission = {
   extraction_approved_at: string | null;
   created_at: string;
   updated_at: string | null;
+};
+
+// evaluations (DATA_MODEL 9절). 제출물 단위 LLM 채점. 쓰기는 service role 전용(INV-6).
+export type EvaluationCriterionScore = {
+  criterion_id: string;
+  score: number;
+  evidence_quote: string; // 근거 인용 필수 (SPEC 6절)
+};
+
+export type Evaluation = {
+  id: string;
+  submission_id: string;
+  project_id: string;
+  scores: EvaluationCriterionScore[];
+  total_score: number;
+  content_hash: string; // 채점 당시 제출물 해시 — 증분 재평가 판정
+  raw_llm_output: string;
+  model: string;
+  is_current: boolean;
+  created_at: string;
+};
+
+// student_scores (DATA_MODEL 10절). 합성 점수·순위·등급 스냅샷. 쓰기는 service role 배치 전용(INV-6).
+export type StudentScore = {
+  id: string;
+  project_id: string;
+  student_id: string;
+  composite_score: number;
+  effective_score: number; // coalesce(students.score_override, composite_score)
+  rank: number;
+  grade: number; // 파생 등급 스냅샷 (토글 즉시 반영은 lib/grading 파생으로)
+  calculated_at: string;
 };
 
 // Supabase 클라이언트 제네릭용 스키마 타입.
@@ -247,6 +283,7 @@ export type Database = {
             | "tie_break"
             | "file_retention_days"
             | "model_routing"
+            | "needs_recalc"
           >
         >;
         Relationships: [];
@@ -266,7 +303,14 @@ export type Database = {
           teacher_memo?: string | null;
         };
         Update: Partial<
-          Pick<Student, "name" | "student_number" | "teacher_memo">
+          Pick<
+            Student,
+            | "name"
+            | "student_number"
+            | "teacher_memo"
+            | "score_override"
+            | "override_reason"
+          >
         >;
         Relationships: [];
       };
@@ -307,6 +351,45 @@ export type Database = {
             | "include_in_eval"
             | "include_in_record"
             | "extraction_approved_at"
+          >
+        >;
+        Relationships: [];
+      };
+      // evaluations·student_scores: insert/update는 RLS상 service role 전용(INV-6).
+      evaluations: {
+        Row: Evaluation;
+        Insert: {
+          submission_id: string;
+          project_id: string;
+          scores: EvaluationCriterionScore[];
+          total_score: number;
+          content_hash: string;
+          raw_llm_output: string;
+          model: string;
+          is_current?: boolean;
+        };
+        Update: Partial<Pick<Evaluation, "is_current">>;
+        Relationships: [];
+      };
+      student_scores: {
+        Row: StudentScore;
+        Insert: {
+          project_id: string;
+          student_id: string;
+          composite_score: number;
+          effective_score: number;
+          rank: number;
+          grade: number;
+          calculated_at: string;
+        };
+        Update: Partial<
+          Pick<
+            StudentScore,
+            | "composite_score"
+            | "effective_score"
+            | "rank"
+            | "grade"
+            | "calculated_at"
           >
         >;
         Relationships: [];

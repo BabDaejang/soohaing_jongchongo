@@ -142,14 +142,35 @@
 - (세션 4 이월) 프로젝트 설정에 evaluate/generate/verify 라우팅 편집 UI는 세션 7. extract 편집은 세션 5에서 완료.
 - 새 마이그레이션은 `db push --db-url`. DB/RLS 검증은 스크래치 pg(미커밋).
 
-## 세션 7 — (예정) Phase 2 평가 파이프라인
+## 세션 7 — 2026-07-09 (Phase 2 상대평가) ✅ 완료
 
-- [ ] 채점 실행 버튼 + "재계산 필요" 배지 (신규 제출물·체크박스 변경 감지)
-- [ ] 제출물 단위 LLM 채점: 루브릭 기반, temperature 0, 기준별 근거 인용, 원문 감사 보관
-- [ ] 합성 점수(합/평균/가중) → 순위 → 등급 파생 (5등급/9등급 누적 비율 매핑, 토글 즉시 반영)
-- [ ] 동점자 처리 (상위 등급/중간석차), score_override(사유 필수 + 감사 로그) 경유 재계산
-- [ ] (세션 4 이월, 배치 확정) 프로젝트 설정에 용도별 model_routing 편집 UI: 프로바이더·모델 선택으로 extract/evaluate/generate/verify 라우팅 조정. DEFAULT_MODELS 기본값 위에서 교사가 `{provider_id, model}` 변경. resolveApiKey가 routing.provider_id로 키를 고름. (DECISIONS 2026-07-08, 사용자 확인 2026-07-08)
-- [ ] **수용 기준**: 등급 직접 수정 경로 없음(INV-6), student_scores는 서버 배치만 씀, override에 사유 없으면 거부
+- [x] 마이그레이션 `0006_evaluations_scores.sql`: evaluations(scores·total_score·content_hash·raw_llm_output·model·is_current, partial unique)·student_scores(composite·effective·rank·grade)·students.score_override/override_reason(+사유 필수 check)·projects.needs_recalc + "재계산 필요" 트리거(submissions·rubrics) + RLS(소유자 select만, 쓰기 service role 전용) — 원격 적용·pg 검증 완료.
+- [x] 순수 로직 `lib/grading.ts`(GRADE_BOUNDARIES·computeStandings·deriveGrade — 배치·클라이언트 토글 공용)·`lib/scoring.ts`(submissionScore·aggregateComposite).
+- [x] 평가 실행(`runEvaluation`): 반영+매칭 제출물만 `callLLM(purpose='평가', temperature 0)`, 루브릭 기준별 점수+원문 근거 인용, evaluations 저장(service role). content_hash 비교로 **증분 재평가**(내용 불변 스킵).
+- [x] 합성 점수(sum/avg/weighted) → effective_score(coalesce override) 내림차순 순위 → 누적 비율 등급 파생. student_scores 재작성은 서버 배치(service role)만.
+- [x] 등급제(5/9) 토글 즉시 반영(파생 재계산, 저장값 아님)·등급 분포 요약(등급별 인원·경계 점수).
+- [x] 동점자 처리(best_grade=최상위 석차 / mid_rank=중간석차). 교사 보정 `setScoreOverride`(값+사유 필수, 감사 로그, 재계산)·`clearScoreOverride`. 사유 메모는 접힘/확장 UI.
+- [x] "재계산 필요" 배지(projects.needs_recalc) — DB 트리거로 감지(세션 5/6 액션 미수정).
+- [x] (세션 4 이월) 프로젝트 설정에 용도별 model_routing 편집 UI(`ModelRoutingForm`): 프로바이더·모델(VISION_MODELS 카탈로그 재사용+자유 입력)로 extract/evaluate/generate/verify 라우팅 변경. `updateModelRouting` 저장.
+- [x] `/projects/[id]/evaluate` 화면 + 프로젝트 홈 Phase 2 링크 활성화.
+- [x] 단위 테스트: `tests/grading.test.ts`(30·100명 5/9등급 누적 비율·동점·경계)·`tests/scoring.test.ts`(sum/avg/weighted·결정성)·model-routing 보강 — `npm test` 45건 통과.
+- [x] **수용 기준 검증**:
+  (1) 등급 경계: 100명 5등급=[10,24,32,24,10](누적 10/34/66/90/100)·9등급=[4,7,12,17,20,17,12,7,4], 30명도 각 등급 누적%가 경계 이하 — 단위 테스트.
+  (2) 결정성: computeStandings·aggregate 동일 입력 동일 출력 단위 테스트 + 채점 temperature 0.
+  (3) INV-6: evaluations·student_scores는 RLS select 정책만(insert 42501 거부·update 0행 — pg 실증). 등급 직접 수정 UI/코드 경로 없음(grade는 recomputeAndSave의 파생 스냅샷, service role write).
+  (4) override 사유 필수: DB check(pg)·서버 액션·클라이언트 3중. 적용 시 순위·등급 재계산 + `score_override.set/clear` 감사 로그.
+  (5) 증분: 현재 평가의 content_hash가 제출물 해시와 같으면 재채점 스킵(신규분만 채점) — runEvaluation 로직.
+  (6) model_routing 편집 저장·재로드(updateModelRouting + 설정 재로드), purpose '평가'→evaluate 대상(변경 provider_id·model)로 라우팅 — 단위 테스트.
+  (7) typecheck·lint·build·test 통과. INV-4 클라이언트 번들 스캔(service role 키·서버 전용 마커 0건) 확인.
+- 특이사항: 팩 0005→**0006**(번호 충돌), evaluations/student_scores 컬럼명·override 위치를 DATA_MODEL(SSOT)로 정합, evaluations.content_hash 신설, 가중 정의·동점 처리·트리거 방식 — 모두 DECISIONS 2026-07-09. 실LLM 채점은 유효 키가 있을 때 라이브 시연(비용 발생) — 채점 호출·파싱·저장 경로는 구성·단위 테스트로 증명.
+
+### 다음 세션(8a) 인계
+
+- 세션 8a = Phase 3 생기부 생성·검증(최우선 핵심). INV-1/2/3을 코드 구조로 강제: 생성 함수는 단일 studentId 시그니처, 서버가 student_id 필터로 컨텍스트 조립.
+- 마이그레이션 0007(records·prompt_profiles)은 세션 8a. records.sources(근거 제출물 id)·verification 저장, 쓰기(generated/verification)는 service role.
+- 생성 컨텍스트의 제출물은 `include_in_record=true`·매칭 확정분만. 교사 메모는 해당 학생 레코드 귀속분만(INV-2 예외).
+- 생성·검증은 callLLM(purpose='생성'/'검증') 라우팅 재사용(세션 7에서 편집 UI 완비). 새 LLM 클라이언트 금지.
+- 새 마이그레이션은 `db push --db-url`. DB/RLS 검증은 스크래치 pg(미커밋).
 
 ## 세션 8 — (예정) Phase 3 생기부 + 결과 화면
 
