@@ -42,6 +42,11 @@ export async function proxy(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
 
+  // Cron 라우트는 자체 시크릿(CRON_SECRET)으로 인증하므로 세션 가드를 통과시킨다(세션 6).
+  if (pathname.startsWith("/api/cron")) {
+    return supabaseResponse;
+  }
+
   // 갱신된 세션 쿠키를 유지한 채 리디렉션
   const redirectTo = (path: string) => {
     const response = NextResponse.redirect(new URL(path, request.url));

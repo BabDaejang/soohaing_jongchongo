@@ -138,6 +138,14 @@ export type MatchStatus =
   | "confirmed"
   | "update_pending";
 
+// 귀속 경로 (세션 6, 마이그레이션 0005). 미귀속/대기 시 NULL.
+export type MatchMethod =
+  | "auto_number"
+  | "auto_new_number"
+  | "confirmed_existing"
+  | "confirmed_new"
+  | "manual";
+
 export type Submission = {
   id: string;
   project_id: string;
@@ -151,6 +159,7 @@ export type Submission = {
   source_type: SubmissionSourceType;
   storage_path: string | null;
   match_status: MatchStatus;
+  match_method: MatchMethod | null;
   match_candidates: unknown;
   pending_content: unknown;
   include_in_eval: boolean;
@@ -275,6 +284,7 @@ export type Database = {
           source_filename?: string | null;
           storage_path?: string | null;
           match_status?: MatchStatus;
+          match_method?: MatchMethod | null;
           match_candidates?: unknown;
           pending_content?: unknown;
           include_in_eval?: boolean;
@@ -286,13 +296,17 @@ export type Database = {
             | "content_text"
             | "content_hash"
             | "source_type"
+            | "student_id"
             | "match_status"
+            | "match_method"
+            | "match_candidates"
             | "pending_content"
             | "storage_path"
             | "raw_student_no"
             | "raw_student_name"
             | "include_in_eval"
             | "include_in_record"
+            | "extraction_approved_at"
           >
         >;
         Relationships: [];

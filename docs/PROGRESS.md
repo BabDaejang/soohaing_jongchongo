@@ -119,13 +119,28 @@
 - Phase 2·3 진행 중에도 이 화면으로 돌아와 자료 추가 가능(매칭 규칙 동일).
 - 새 마이그레이션은 `db push --db-url`. DB/RLS 검증은 스크래치 pg(미커밋).
 
-## 세션 6 — (예정) Phase 1(b) 매칭·확인 큐·원본 삭제
+## 세션 6 — 2026-07-08 (Phase 1(b) 매칭·확인 큐·원본 삭제) ✅ 완료
 
-- [ ] 매칭 규칙 (a)~(d) 구현: 학번 일치만 자동, 나머지는 확인 대기 큐
-- [ ] 확인 대기 큐 UI: LLM 후보 제안 표시 + 교사 확정, 신규 학생 확인 흐름
-- [ ] 제출물 상세 화면: 목록·열람, 평가/생기부 반영 체크박스, 수정/삭제/수동 추가
-- [ ] 추출 텍스트 품질 승인 → 원본 삭제 흐름 (INV-5), N일 자동 삭제 보조 정책
-- [ ] **수용 기준**: 학번 없는 제출물이 자동 귀속되는 경로가 없음, 승인 전 원본 삭제 경로가 없음(INV-5)
+- [x] 마이그레이션 `0005_match_method.sql`: submissions.match_method(귀속 경로) 추가 — 원격 적용·pg 검증.
+- [x] 매칭 엔진: 순수 함수 `lib/matching.ts`(classifyMatch) — (a)학번 일치=auto_matched(auto_number), (d)신규 학번=학생 자동 생성(auto_new_number), (b)이름만/(c)식별불가=pending_confirm(**학번 없으면 자동 없음**). `runMatching` 액션이 적용(unmatched만, 재실행 안전).
+- [x] 확인 대기 큐 UI(`confirm-queue`): pending_confirm 후보(이름 일치)·선택 학생 확정·**LLM 후보 제안 지연 실행**(callLLM purpose='매칭', 근거 표시)·신규 학생 생성·보류. update_pending은 현재/새 내용 비교 후 반영/거부(수용 4).
+- [x] 제출물 상세(`student-submissions`): 학생별 그룹, 내용 열람(접기/전체), 평가/생기부 반영 체크박스(자동 저장), 수정/삭제/수동 추가(source_type='manual').
+- [x] 원본 삭제(INV-5): "추출 확인"(extraction_approved_at) 후에만 "원본 삭제" 활성. `deleteOriginal` 액션이 미승인 시 거부 + 공유 경로 안전 삭제 + audit. N일 자동 삭제 `/api/cron/purge-originals`(CRON_SECRET) + `isPurgeEligible`.
+- [x] `/projects/[id]/submissions` 화면 + ingest↔submissions 링크. proxy.ts /api/cron 통과.
+- [x] 단위 테스트 11건 추가(matching 6·retention 5) — `npm test` 30건 통과.
+- [x] **수용 기준 검증**:
+  (1)(2) 학번 있으면 auto_matched, 이름만은 반드시 pending_confirm·student_id NULL(정확히 1명 일치여도 자동 아님) — classifyMatch 단위 테스트 + pg로 DB 상태 확인. 학번 없는 자동 귀속 코드 경로 구조적 부재.
+  (3) 미승인 원본 삭제 불가 — deleteOriginal 가드 + isPurgeEligible(미승인 always false) 단위 테스트 + pg(미승인 원본이 purge 후보 SQL에서 제외).
+  (4) update_pending 반영/거부 — accept/rejectPendingContent + 확인 큐 UI.
+  (5) typecheck·lint·build·test 통과. INV-4 번들 스캔(service role·CRON_SECRET 부재) 확인.
+- 특이사항: 팩↔DATA_MODEL 명칭 정합(auto_matched/source_type), match_method 컬럼 신설, LLM 후보 지연 실행 — 모두 DECISIONS 2026-07-08. N일 자동 삭제의 실제 스케줄링은 운영 배선(문서화, CRON_SECRET 필요).
+
+### 다음 세션(7) 인계
+
+- 세션 7 = Phase 2 상대평가. `include_in_eval=true`·`student_id NOT NULL`·`match_status IN ('auto_matched','confirmed')`인 제출물만 채점 대상(스테이징·미매칭 제외 — 혼입 방지). 채점은 callLLM(purpose='평가', temperature 0).
+- evaluations·student_scores 마이그레이션(0006 예정)은 세션 7. student_scores·evaluations 쓰기는 service role 전용(INV-6, DATA_MODEL 9·10절).
+- (세션 4 이월) 프로젝트 설정에 evaluate/generate/verify 라우팅 편집 UI는 세션 7. extract 편집은 세션 5에서 완료.
+- 새 마이그레이션은 `db push --db-url`. DB/RLS 검증은 스크래치 pg(미커밋).
 
 ## 세션 7 — (예정) Phase 2 평가 파이프라인
 

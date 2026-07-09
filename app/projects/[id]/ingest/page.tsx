@@ -73,6 +73,12 @@ export default async function IngestPage({
           학생 산출물을 업로드하면 텍스트를 추출해 제출물 후보로 만듭니다. 학생
           매칭은 다음 단계에서 확정합니다. 원본 파일은 추출 확인 전까지 임시
           보관됩니다.
+          <Link
+            href={`/projects/${project.id}/submissions`}
+            className="ml-1 underline underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"
+          >
+            매칭·확인으로 →
+          </Link>
         </p>
       </header>
 
