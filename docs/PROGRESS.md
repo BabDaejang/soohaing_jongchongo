@@ -242,3 +242,29 @@
 - 세션 9 = 통합 QA + 불변조건 감사 + Vercel 배포 준비(원 팩 I절). 스모크 시나리오 전 구간·RLS 전수 점검(전 14테이블 타 계정 차단)·INVARIANTS_AUDIT.md(INV-1~6 보장 지점 코드 특정)·환경변수 체크리스트·README·시드 스크립트.
 - RLS 전수 점검 시 ui_layouts 포함. pooler 경유 pg 스크립트(스크래치, 미커밋) 재사용. `.env.local`의 SUPABASE_DB_URL은 직접 호스트(IPv6)라, pooler URL은 동일 비밀번호로 `postgres.<ref>@aws-1-ap-northeast-2.pooler.supabase.com:5432` 구성.
 - Phase 3 결과 표는 student_scores 스냅샷이 있어야 등급이 표시된다(Phase 2 채점 선행). 실 LLM 생성·채점은 유효 키가 있을 때 라이브 시연(비용 발생).
+
+## 세션 9 — 2026-07-10 (통합 QA + 불변조건 감사 + Vercel 배포 준비) ✅ 완료(자동 구간) / ⏳ 브라우저 구간 사용자 수행 대기
+
+- [x] 자동 검증 전부 통과: `typecheck`·`lint`·`build`·`npm test`(**76/76**). 클라이언트 번들 스캔(.next/static): service role 키·`createDecipheriv`/`aes-256-gcm`·`APP_ENCRYPTION_KEY`·`encrypted_key` **0건**(공개 URL만 노출) — INV-4.
+- [x] **RLS 전수 점검(16/16 PASS)**: 15개 테이블(profiles/app_settings/providers/api_keys/audit_logs/projects/students/rubrics/submissions/evaluations/student_scores/records/prompt_profiles/prompt_profile_versions/ui_layouts) + Storage `originals`(storage.objects 4정책). pooler 경유 pg, 롤백 트랜잭션에 전 체인 시드 후 `set role authenticated`+JWT 클레임으로 소유자/타 계정 대조. 타 계정 열람 0행·쓰기 차단(INSERT 42501, UPDATE/DELETE 0행), INV-3(generated service role)·INV-6(evaluations/student_scores service role) 실증. 스크립트는 스크래치·미커밋.
+- [x] **docs/INVARIANTS_AUDIT.md** 작성: INV-1~6 각각의 보장 지점을 파일·함수·RLS 정책·라인 단위로 특정(INV-1/2 `buildStudentContext` 단일 studentId + `.eq(student_id)` + `filterRecordSubmissions`, INV-4 `server-only`+번들 스캔). JWT 시뮬 한계 명시.
+- [x] **실 LLM 라이브 1회(PASS)**: 사용자 승인·키 제공(OpenAI). service role 하니스로 임시 프로젝트+학생 2명 시드 → 실 lib 파이프라인(평가→생성→검증, gpt-4o-mini 6호출) → 저장 재조회 검증 → 임시 데이터·등록 키 삭제(미영속). 키 경로(encrypt→resolveApiKey→decrypt), 컨텍스트 본인 제출물만(INV-1/2), sources 저장(INV-3), 검증 미근거 문장 플래그 모두 정상. 결과 `docs/SMOKE_TEST.md`.
+- [x] **SheetJS advisory 재검토(세션 5 이월)** → CDN 0.20.3 업그레이드로 high 2건 해소. `docs/DECISIONS.md` 기록.
+- [x] **docs/SMOKE_TEST.md**: 자동 구간 결과 + 브라우저 구간 사용자 체크리스트(가입→대기→승인→…→재로그인 복원 15단계) + 실 LLM 라이브 결과.
+- [x] **README.md**: 개요·스택·환경변수 체크리스트(7종)·로컬 개발·Supabase 설정(OAuth·마이그레이션·시드 3경로)·Vercel 배포(빌드·환경변수·Cron)·운영 가이드·보안·문서 맵.
+- [x] **vercel.json**(purge-originals Cron 매일 03:00 UTC, CRON_SECRET Bearer) + **.env.example** 보완(SUPABASE_DB_URL, Google OAuth 위치 안내).
+- [x] 시드 3경로(ADMIN_EMAIL 콜백 승격/0002 프로바이더/ensureDefaultProfile) 확인 — 부족분 없음, README 문서화(새 시드 스크립트 미생성).
+- [x] **수용 기준 자체 점검**:
+  (1) 스모크 시나리오: 자동 구간 + 실 LLM 라이브 1회 통과, 브라우저 구간은 사용자 수행 체크리스트 제공(SMOKE_TEST.md).
+  (2) INVARIANTS_AUDIT.md 완성 — INV-1/2/4 보장 지점이 코드 위치(파일·라인)로 특정됨.
+  (3) RLS 전수 15테이블 + storage 정책 통과(16/16).
+  (4) README만으로 배포 가능한 수준(환경변수·마이그레이션·Vercel·Cron·시드·운영).
+  (5) typecheck·lint·build·test 통과.
+  (6) SheetJS advisory 재검토 결론(업그레이드 완화) DECISIONS.md 기록.
+- 특이사항: xlsx 의존성 소스가 npm→SheetJS CDN tgz로 변경(0.20.3). 라이브 검증 OpenAI 키는 대화 노출로 **회전 권고**(라이브 후 등록 키 삭제·미영속). 브라우저 OAuth 구간은 에이전트 수행 불가 → 사용자 체크리스트 위임(수행하지 않은 구간을 통과처럼 표기하지 않음).
+
+### 배포 전 사용자 수행 필요(인계)
+
+- `docs/SMOKE_TEST.md` [B] 브라우저 15단계(2번째 Google 계정으로 가입→대기→승인→업로드→매칭→평가→생성→표 편집→재로그인 복원) 수행·결과 기록.
+- 배포 시 Supabase Google 프로바이더 활성화 + Redirect URLs에 배포 도메인 등록, Vercel 환경변수 7종 등록, 마이그레이션 `db push` 적용.
+- 노출된 OpenAI 키 폐기·재발급 후 `/admin`(기본 키) 또는 `/account`(개인 키)에 재등록.

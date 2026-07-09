@@ -20,7 +20,7 @@
     "react-dom": "19.2.4",
     "server-only": "^0.0.1",
     "unpdf": "^1.6.2",
-    "xlsx": "^0.18.5"
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
