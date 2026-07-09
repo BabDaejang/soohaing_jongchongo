@@ -199,12 +199,13 @@
 - [x] 마이그레이션 SQL `0008_prompt_profile_versions.sql` 작성: `prompt_profiles.version int default 1` + `prompt_profile_versions`(스냅샷 이력, source seed/edit/ingest/import/restore, append-only) + RLS(owner-only).
 - [x] `saveProfileLayer`(저장 시 version+1 + 이력 스냅샷), `importProfileFromMarkdown`(서버 재파싱), `listProfileVersions`·`restoreProfileVersion`(복원=새 버전). `lib/records/profile-markdown.ts`(순수 render/parse). ProfileEditor에 버전·날짜 표시·MD 내보내기·가져오기(미리보기)·버전 이력·복원 UI.
 - [x] 단위 테스트 `tests/profile-markdown.test.ts`(render/parse 왕복·번호·불릿·(없음)·섹션밖 무시) — `npm test` **62건** 통과. typecheck·lint·build 통과.
-- [ ] ⏳ **마이그레이션 0008 원격 적용 보류**: IPv6 전용 직접 DB 호스트가 이번 작업 시간 내내 라우팅 불가(ENETUNREACH)로 `supabase db push` 실패. **SQL 파일은 커밋되어 있어 연결 복구 시 `db push`로 즉시 적용**된다(현재 로컬/dev, 실사용자 없음). 적용 후 pg로 스키마·RLS 확인 필요.
+- [x] **마이그레이션 0008 원격 적용 완료(2026-07-10)**: 직접 호스트(IPv6 전용) 라우팅 불가가 지속되어 **IPv4 pooler(`aws-1-ap-northeast-2.pooler.supabase.com:5432`, 세션 모드, user `postgres.<ref>`)로 `db push` 성공**. pg(pooler 경유)로 스키마 검증: version 컬럼·ppv 9컬럼·unique(profile_id,version)·정책 select+insert만(append-only) 확인.
+- [x] **8a에서 보류했던 RLS 행위 테스트 완료(2026-07-10, pooler 경유)**: records — 소유자 세션 generated insert 42501 거부(INV-3)·edited insert 허용·소유자 select 가능·타 계정 select 0행·타 계정 insert 42501 거부·service role generated 허용. prompt_profiles/ppv — 소유자 insert 허용·타 계정 select 0행·ppv update 0행(append-only). 승인 사용자가 1명뿐이라 타 계정은 임의 uuid JWT 클레임으로 시뮬레이션(정책이 owner/owns_project 비교만 하므로 유효).
 
 ### 다음 세션(8b) 인계
 
 - 세션 8b = Phase 3 결과 표 UI(SPEC 8절). 마이그레이션 **`0009_ui_layouts.sql`**(ui_layouts, (user_id, project_id) 유니크, layout jsonb) + RLS. (0008은 8a 확장의 prompt_profile_versions가 사용 — 세션 시작 시 최신 번호 확인.)
-- **선행 확인**: IPv6 복구 후 `0008_prompt_profile_versions.sql` 원격 적용(`db push`) + pg 검증이 아직이면 먼저 수행.
+- 직접 DB 호스트(IPv6 전용) 라우팅이 불안정하면 **IPv4 pooler로 push/pg 가능**: `postgresql://postgres.<ref>:<pw>@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres` (세션 모드 — set role·트랜잭션 동작 확인됨).
 - 결과 표 4열(학생 정보|등급|교사 메모|생기부), 열 너비 드래그, 셀 3모드(접기/전체/커스텀 높이), 행·전체 토글, 레이아웃 (user_id, project_id) DB 저장(디바운스)·복원.
 - 생기부 셀 직접 수정 = 새 버전 저장(origin='edited', `saveRecordEdit` 재사용 가능). 등급은 student_scores 스냅샷 + `lib/grading` 파생 표시.
 - 세션 8a의 records/prompt_profiles 행위 RLS pg 검증을 IPv6 복구 후 함께 수행. 새 마이그레이션은 `db push --db-url`.
