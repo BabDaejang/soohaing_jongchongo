@@ -39,7 +39,7 @@ export default async function ProjectHomePage({
         <p className="mb-3 text-sm text-zinc-500">
           평가를 시작하기 전에 평가 규칙과 학생 명단을 갖춥니다.
         </p>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <SetupCard
             href={`/projects/${project.id}/settings`}
             title="설정"
@@ -55,14 +55,18 @@ export default async function ProjectHomePage({
             title="학생 명단"
             desc="학생 추가·수정, 교사 관찰 메모"
           />
+          <SetupCard
+            href={`/projects/${project.id}/profile`}
+            title="프롬프트 프로필"
+            desc="생기부 작성 참고·금지사항(계정 기본+오버라이드)"
+          />
         </div>
       </section>
 
       <section>
         <h2 className="mb-1 text-lg font-semibold">평가 흐름</h2>
         <p className="mb-3 text-sm text-zinc-500">
-          준비가 끝나면 아래 세 단계를 순서대로 진행합니다. (각 단계는 이후
-          업데이트에서 제공됩니다.)
+          준비가 끝나면 아래 세 단계를 순서대로 진행합니다.
         </p>
         <ol className="flex flex-col gap-3">
           <PhaseCard
@@ -81,6 +85,7 @@ export default async function ProjectHomePage({
             step={3}
             title="Phase 3 · 생기부"
             desc="학생별로 산출물과 관찰 메모에 근거한 생기부를 생성하고, 근거 없는 문장을 검증·표시합니다. 학생 한 명씩 격리 생성됩니다."
+            href={`/projects/${project.id}/records`}
           />
         </ol>
       </section>

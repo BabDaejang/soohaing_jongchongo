@@ -205,6 +205,50 @@ export type StudentScore = {
   calculated_at: string;
 };
 
+// records (DATA_MODEL 11절, INV-1~3). 생기부 버전 관리.
+//   origin: 'generated'(LLM 생성, service role write) / 'edited'(교사 편집) / 'manual'(교사 수동 작성).
+//   팩의 edited_by_teacher는 origin='edited'로 실현한다 (DECISIONS 2026-07-09).
+export type RecordOrigin = "generated" | "edited" | "manual";
+
+// 검증 패스 결과 항목 (DATA_MODEL 11절). grounded=false 문장이 UI 하이라이트 대상.
+//   grounded_by_memo: 제출물이 아닌 교사 메모에 근거한 경우(source_submission_ids는 빈 배열).
+//   teacher_edited: 교사가 직접 수정한 문장(검증 재실행 보류 — 하이라이트 제외, '교사 편집' 표시).
+export type VerificationSentence = {
+  sentence: string;
+  grounded: boolean;
+  source_submission_ids: string[];
+  grounded_by_memo?: boolean;
+  teacher_edited?: boolean;
+};
+
+export type StudentRecord = {
+  id: string;
+  project_id: string;
+  student_id: string;
+  version: number;
+  content: string;
+  sources: string[]; // 근거 제출물 id 목록 (INV-3). uuid[]
+  teacher_memo_used: boolean;
+  verification: VerificationSentence[] | null;
+  model: string | null;
+  origin: RecordOrigin;
+  is_current: boolean;
+  created_at: string;
+};
+
+// prompt_profiles (DATA_MODEL 12절). 계정 기본(project_id NULL) + 프로젝트 오버라이드.
+export type ProfileItem = { id: string; text: string };
+
+export type PromptProfile = {
+  id: string;
+  owner_id: string;
+  project_id: string | null; // NULL = 계정 기본 프로필
+  guidelines: ProfileItem[]; // 작성 참고사항
+  prohibitions: ProfileItem[]; // 금지사항
+  created_at: string;
+  updated_at: string | null;
+};
+
 // Supabase 클라이언트 제네릭용 스키마 타입.
 // profiles Insert는 never — 생성 경로는 auth 트리거(handle_new_user)뿐이다.
 export type Database = {
@@ -392,6 +436,36 @@ export type Database = {
             | "calculated_at"
           >
         >;
+        Relationships: [];
+      };
+      // records: generated 행 insert는 RLS상 service role 전용(INV-3). 교사 edited/manual은 소유자.
+      records: {
+        Row: StudentRecord;
+        Insert: {
+          project_id: string;
+          student_id: string;
+          version: number;
+          content: string;
+          sources: string[];
+          origin: RecordOrigin;
+          teacher_memo_used?: boolean;
+          verification?: VerificationSentence[] | null;
+          model?: string | null;
+          is_current?: boolean;
+        };
+        // 버전 행은 불변 — 갱신은 새 버전 insert. is_current 관리만 update.
+        Update: Partial<Pick<StudentRecord, "is_current">>;
+        Relationships: [];
+      };
+      prompt_profiles: {
+        Row: PromptProfile;
+        Insert: {
+          owner_id: string;
+          project_id?: string | null;
+          guidelines?: ProfileItem[];
+          prohibitions?: ProfileItem[];
+        };
+        Update: Partial<Pick<PromptProfile, "guidelines" | "prohibitions">>;
         Relationships: [];
       };
     };

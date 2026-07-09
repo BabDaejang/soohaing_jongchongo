@@ -212,14 +212,15 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | content | text | not null | 생기부 본문 |
 | sources | uuid[] | not null | 근거 제출물 id 목록 (INV-3). 수동 작성 버전은 빈 배열 허용 |
 | teacher_memo_used | boolean | not null default false | 생성 컨텍스트에 교사 메모 포함 여부 (감사) |
-| verification | jsonb | | 검증 패스 결과: `[{sentence, grounded, source_submission_ids}]` — grounded=false 문장이 UI 하이라이트 대상 |
+| verification | jsonb | | 검증 패스 결과: `[{sentence, grounded, source_submission_ids, grounded_by_memo?, teacher_edited?}]` — grounded=false(교사 편집 아님) 문장이 UI 하이라이트 대상. `grounded_by_memo`=교사 메모 근거(제출물 아님), `teacher_edited`=교사 직접 수정 문장(검증 재실행 보류, 하이라이트 제외) (세션 8a 확장, DECISIONS 2026-07-09) |
 | model | text | | 생성 모델 (수동 편집 버전은 NULL) |
-| origin | text | not null, check in ('generated','edited','manual') | 버전 출처 |
+| origin | text | not null, check in ('generated','edited','manual') | 버전 출처. 팩의 `edited_by_teacher`는 `origin='edited'`로 실현 (세션 8a, DECISIONS 2026-07-09) |
 | is_current | boolean | not null default true | `(student_id, is_current=true)` partial unique |
 | created_at | timestamptz | not null default now() | |
 
-- 생성은 **서버 전용**: 컨텍스트는 서버가 `student_id` 필터로 DB에서 직접 조립 (INV-2). 일괄 생성도 학생별 순차 호출 (INV-1).
-- **RLS**: 소유자 select. **generated/verification의 insert는 service role 전용**, 교사 편집(edited 버전 insert)은 소유자 허용.
+- 세션 8a 마이그레이션 `0007_records_profiles.sql`(팩은 0006을 언급하나 0006은 세션 7이 선점).
+- 생성은 **서버 전용**: 컨텍스트는 서버가 `buildStudentContext(studentId)`(단일 studentId 시그니처)로 `student_id` 필터로 DB에서 직접 조립 (INV-2). 일괄 생성도 클라이언트가 학생별 `generateRecord`를 순차 단일 호출 (INV-1 — 학생 배열 시그니처 함수 부재).
+- **RLS**(세션 8a): 소유자 select(`owns_project` or admin). **generated 행 insert는 service role 전용**(RLS insert 정책 `origin in ('edited','manual')`만 허용 → authenticated는 generated 위조 불가, INV-3). 교사 편집(`edited`)·수동본(`manual`) insert는 소유자 허용, is_current 관리 update는 소유자. delete 정책 없음(append-only).
 
 ## 12. prompt_profiles — 프롬프트 프로필 (계정 기본 + 프로젝트 오버라이드)
 
@@ -232,10 +233,12 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | prohibitions | jsonb | not null default '[]' | 금지사항 목록: `[{id, text}]` |
 | created_at / updated_at | timestamptz | | |
 
-- unique: `(owner_id, project_id)` (project_id NULL 포함 — partial unique 2개).
-- 시드(계정 최초 생성 시): 문체 기본값 — 종결어미 '-함/-임/-됨', 학생 성명·인칭대명사 미표기 (SPEC 7.5).
-- 예시 생기부 인제스트: LLM diff 제안은 저장하지 않고 UI 상태로만, 교사 승인 항목만 이 테이블에 반영 (자동 반영 금지).
-- **RLS**: `owner_id = auth.uid()`만.
+- 세션 8a 마이그레이션 `0007_records_profiles.sql`. 팩의 `guidance`는 DATA_MODEL의 `guidelines`로 정합 (DECISIONS 2026-07-09).
+- unique: `(owner_id, project_id)` (project_id NULL 포함 — partial unique 2개: `(owner_id) where project_id is null`, `(owner_id, project_id) where project_id is not null`).
+- 시드(계정 최초 접근 시 `ensureDefaultProfile`): 문체 기본값 — 종결어미 '-함/-임/-됨', 학생 성명·인칭대명사 미표기 등. 실제 항목은 `docs/SEED_PROFILE.md` = `lib/prompts/seed-profile.ts` (SPEC 7.5).
+- 계층 병합(`lib/records/profile.ts` `mergeProfileLayers`): 계정 기본(base) → 프로젝트 오버라이드(우선, 뒤에 적용). 배치·UI 공용 순수 함수.
+- 예시 생기부 인제스트: LLM diff 제안은 저장하지 않고(`analyzeExample` 쓰기 없음) UI 상태로만, 교사 승인 항목만 `applyProfileSuggestions`가 반영 (자동 반영 금지).
+- **RLS**: `owner_id = auth.uid()`만(select/insert/update/delete 4정책, 쓰기는 +승인).
 
 ## 13. ui_layouts — 결과 표 레이아웃 저장
 

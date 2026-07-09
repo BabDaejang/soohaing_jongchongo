@@ -172,14 +172,40 @@
 - 생성·검증은 callLLM(purpose='생성'/'검증') 라우팅 재사용(세션 7에서 편집 UI 완비). 새 LLM 클라이언트 금지.
 - 새 마이그레이션은 `db push --db-url`. DB/RLS 검증은 스크래치 pg(미커밋).
 
-## 세션 8 — (예정) Phase 3 생기부 + 결과 화면
+## 세션 8a — 2026-07-09 (Phase 3 생기부 생성·검증) ✅ 완료
 
-> 분량이 크므로 필요 시 8a(생성·검증)/8b(프로필·결과 표)로 분할 가능.
+- [x] 마이그레이션 `0007_records_profiles.sql`: records(sources uuid[]·verification jsonb·version·origin generated/edited/manual·is_current, 학생당 현재 1행 partial unique)·prompt_profiles(owner·project_id NULL=계정 기본·guidelines/prohibitions, partial unique 2개) + RLS(소유자 select, **generated insert는 service role 전용**=INV-3, 교사 edited/manual 소유자, prompt_profiles owner-only) — 원격 적용·pg 스키마/정책 검증 완료.
+- [x] 생성 컨텍스트 `lib/records/context.ts`: **`buildStudentContext(studentId, source)` 단일 studentId 시그니처(INV-1)**. `.eq('student_id')` 조회(구조적 INV-2) + 순수 `filterRecordSubmissions`(반영+매칭 확정만, 방어적 재필터). 주입형 `ContextSource`로 테스트 가능.
+- [x] 생성 파이프라인 `generateRecord(projectId, studentId)`: 컨텍스트 조립 → `callLLM('생성')` 초안 → `callLLM('검증')` → `parseVerification`(문장별 근거, 환각 id 제거·강등) → records에 content·**sources(사용 제출물 id, INV-3)**·verification·version(재생성 시 +1) 저장(service role). 일괄 생성=클라이언트 학생별 순차 단일 호출(진행률 바, INV-1).
+- [x] 검증 뷰(`verification-view`): unsupported 문장 하이라이트 + 문장별 [삭제/직접수정/재생성]. 직접수정·삭제는 재검증 보류(새 'edited' 버전, teacher_edited 표시), 재생성만 `regenerateSentence`가 검증 재실행(사용자 확정).
+- [x] 프롬프트 프로필 화면(`/projects/[id]/profile`): 좌(참고)/우(금지) 2패널 + 분할바 드래그, 항목 추가/수정/삭제/순서변경, 계정 기본+프로젝트 오버라이드 계층(적용 순서 표기, `mergeProfileLayers`). 시드(참고 6+금지 6, `docs/SEED_PROFILE.md`) `ensureDefaultProfile`로 로드.
+- [x] 예시 인제스트: `analyzeExample`(쓰기 없음, LLM purpose='생성') → diff 제안 → 항목별 승인/거부 → `applyProfileSuggestions`(승인분만) — 자동 반영 금지(수용 5).
+- [x] 글자수 카운터(`char-counter`): 제한 대비 실시간 + 방식 토글(글자수 공백 포함/바이트 한글 3, 순수 `countText`). 교사 관찰 메모 박스는 세션 4 `TeacherMemoBox` 재사용(자동 저장). 버전 이력 열람.
+- [x] 프롬프트 템플릿은 `lib/prompts/`(generation·verification·example-ingest·seed-profile)에 파일 분리. `callLLM(purpose='생성'/'검증')` 라우팅 재사용(새 LLM 클라이언트 없음).
+- [x] 프로젝트 홈: Phase 3 링크 활성화 + 준비 섹션 "프롬프트 프로필" 카드 추가.
+- [x] 단위 테스트 4종(record-context·verification·prompt-profile·text-count) — `npm test` 58건 통과.
+- [x] **수용 기준 검증**:
+  (1) `buildStudentContext`가 단일 studentId 시그니처(테스트 `buildStudentContext.length===2`). 가짜 2명 데이터 교차오염 테스트: A 컨텍스트에 B 제출물/내용 미포함, 버그로 소스가 전체를 반환해도 방어적 재필터로 A만 — 단위 테스트.
+  (2) `records.sources`에 컨텍스트에 실제 사용된 제출물 id 배열 저장(generateRecord).
+  (3) 근거 없는 문장·환각 id 모의 응답에서 grounded=false 플래그·id 제거 → records.verification 저장 — 단위 테스트.
+  (4) 프로필 계층 계정→오버라이드 적용 순서·태그 — 단위 테스트.
+  (5) 예시 인제스트 analyze(무쓰기)/apply(승인분만) 분리로 교사 승인 없이 프로필 불변.
+  (6) typecheck·lint·build·test 통과. INV-4 클라이언트 번들 스캔(service role 키·서버 전용 마커·api-key 헤더 0건).
+- 특이사항: 팩 0006→**0007**(0006 선점), edited_by_teacher→origin('edited'), guidance→guidelines, sources uuid[], verification에 grounded_by_memo/teacher_edited 확장, SEED_PROFILE 신설(원 팩 L절 미확보) — 모두 DECISIONS 2026-07-09. **records/prompt_profiles의 행위(cross-account) pg 테스트는 이번 세션 중 직접 Postgres 호스트(IPv6 전용)의 라우팅 불가(ENETUNREACH)로 보류** — 구조적 RLS(정책 qual/with_check: generated는 authenticated insert 정책에서 제외, select는 owns_project)는 pg로 확정, 정책 의미가 행위를 보장. IPv6 복구 시 재확인 권장(세션 9 RLS 전수 점검 포함). 실 LLM 생성·검증은 비용 발생 → 호출·파싱·저장 경로는 단위 테스트+구조로 증명, 유효 키 존재 시 라이브 시연.
 
-- [ ] 생기부 생성: 학생 1명 = 호출 1회(INV-1), 서버가 student_id 필터로 컨텍스트 조립(INV-2), sources 저장(INV-3), 버전 관리
-- [ ] 검증 패스: 문장 단위 근거 판정 → 미근거 문장 하이라이트, 삭제/수정/재생성 선택
-- [ ] 프롬프트 프로필: 참고/금지 2패널(분할바), 계정 기본+프로젝트 오버라이드, 시드 문체 기본값
-- [ ] 예시 생기부 인제스트: diff 제안 → 교사 승인 항목만 반영
-- [ ] 글자수 카운터 (제한 대비 실시간, 글자수/바이트 토글)
-- [ ] 결과 표: 4열, 열 너비 드래그, 셀 3모드(접기/전체/커스텀), 행·전체 토글, 레이아웃 DB 저장·복원
-- [ ] **수용 기준**: 생성 호출 페이로드에 타 학생 데이터가 포함될 수 있는 코드 경로가 없음, 검증 결과가 records.verification에 저장됨
+### 다음 세션(8b) 인계
+
+- 세션 8b = Phase 3 결과 표 UI(SPEC 8절). 마이그레이션 `0008_ui_layouts.sql`(ui_layouts, (user_id, project_id) 유니크, layout jsonb) + RLS.
+- 결과 표 4열(학생 정보|등급|교사 메모|생기부), 열 너비 드래그, 셀 3모드(접기/전체/커스텀 높이), 행·전체 토글, 레이아웃 (user_id, project_id) DB 저장(디바운스)·복원.
+- 생기부 셀 직접 수정 = 새 버전 저장(origin='edited', `saveRecordEdit` 재사용 가능). 등급은 student_scores 스냅샷 + `lib/grading` 파생 표시.
+- 세션 8a의 records/prompt_profiles 행위 RLS pg 검증을 IPv6 복구 후 함께 수행. 새 마이그레이션은 `db push --db-url`.
+
+## (참고) 세션 8 원 골격 — 8a 완료, 8b 잔여
+
+- [x] 생기부 생성: 학생 1명 = 호출 1회(INV-1), 서버가 student_id 필터로 컨텍스트 조립(INV-2), sources 저장(INV-3), 버전 관리 — 세션 8a
+- [x] 검증 패스: 문장 단위 근거 판정 → 미근거 문장 하이라이트, 삭제/수정/재생성 선택 — 세션 8a
+- [x] 프롬프트 프로필: 참고/금지 2패널(분할바), 계정 기본+프로젝트 오버라이드, 시드 문체 기본값 — 세션 8a
+- [x] 예시 생기부 인제스트: diff 제안 → 교사 승인 항목만 반영 — 세션 8a
+- [x] 글자수 카운터 (제한 대비 실시간, 글자수/바이트 토글) — 세션 8a
+- [ ] 결과 표: 4열, 열 너비 드래그, 셀 3모드(접기/전체/커스텀), 행·전체 토글, 레이아웃 DB 저장·복원 — **세션 8b**
+- [x] **수용 기준**: 생성 호출 페이로드에 타 학생 데이터가 포함될 수 있는 코드 경로가 없음, 검증 결과가 records.verification에 저장됨 — 세션 8a
