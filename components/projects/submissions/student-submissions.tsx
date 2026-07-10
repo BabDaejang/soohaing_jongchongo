@@ -7,10 +7,15 @@ import {
   approveExtraction,
   deleteOriginal,
   deleteSubmission,
+  reassignSubmission,
   toggleInclude,
   updateSubmissionText,
 } from "@/app/projects/[id]/submissions/actions";
-import type { MatchMethod, SubmissionSourceType } from "@/lib/supabase/types";
+import type {
+  IdentitySource,
+  MatchMethod,
+  SubmissionSourceType,
+} from "@/lib/supabase/types";
 
 type StudentOpt = { id: string; student_number: string | null; name: string };
 
@@ -21,6 +26,7 @@ export type SubRow = {
   source_type: SubmissionSourceType;
   content_text: string;
   match_method: MatchMethod | null;
+  identity_source: IdentitySource | null;
   include_in_eval: boolean;
   include_in_record: boolean;
   storage_path: string | null;
@@ -29,11 +35,27 @@ export type SubRow = {
 
 const METHOD_LABEL: Record<MatchMethod, string> = {
   auto_number: "학번 자동",
+  auto_name: "이름 자동",
   auto_new_number: "신규 학번 자동",
   confirmed_existing: "교사 확정",
   confirmed_new: "교사 신규",
   manual: "수동 입력",
+  reassigned: "교사 재귀속",
 };
+
+// 자동 귀속의 근거를 교사가 훑어볼 수 있도록 식별값 출처를 함께 보여준다 (SPEC 5.2).
+const SOURCE_LABEL: Record<IdentitySource, string> = {
+  column: "열",
+  filename: "파일명",
+  llm: "LLM 추정",
+};
+
+// LLM 추정으로 자동 귀속된 건은 눈에 띄게 — 가장 검토가 필요한 경로다.
+const AUTO_METHODS: ReadonlySet<MatchMethod> = new Set([
+  "auto_number",
+  "auto_name",
+  "auto_new_number",
+]);
 
 const inputClass =
   "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100";
@@ -73,6 +95,7 @@ export function StudentSubmissions({
           key={student.id}
           projectId={projectId}
           student={student}
+          students={students}
           rows={byStudent.get(student.id) ?? []}
         />
       ))}
@@ -83,10 +106,12 @@ export function StudentSubmissions({
 function StudentGroup({
   projectId,
   student,
+  students,
   rows,
 }: {
   projectId: string;
   student: StudentOpt;
+  students: StudentOpt[];
   rows: SubRow[];
 }) {
   const router = useRouter();
@@ -144,18 +169,28 @@ function StudentGroup({
 
       <ul className="flex flex-col gap-2">
         {rows.map((row) => (
-          <SubmissionRow key={row.id} projectId={projectId} row={row} />
+          <SubmissionRow key={row.id} projectId={projectId} row={row} students={students} />
         ))}
       </ul>
     </div>
   );
 }
 
-function SubmissionRow({ projectId, row }: { projectId: string; row: SubRow }) {
+function SubmissionRow({
+  projectId,
+  row,
+  students,
+}: {
+  projectId: string;
+  row: SubRow;
+  students: StudentOpt[];
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [expanded, setExpanded] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [moving, setMoving] = useState(false);
+  const [moveTo, setMoveTo] = useState("");
   const [text, setText] = useState(row.content_text);
   const [evalOn, setEvalOn] = useState(row.include_in_eval);
   const [recordOn, setRecordOn] = useState(row.include_in_record);
@@ -178,7 +213,18 @@ function SubmissionRow({ projectId, row }: { projectId: string; row: SubRow }) {
     <li className="rounded border border-zinc-100 p-3 dark:border-zinc-800">
       <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
         <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">{row.source_type}</span>
-        {row.match_method && <span>{METHOD_LABEL[row.match_method]}</span>}
+        {row.match_method && (
+          <span
+            className={
+              row.identity_source === "llm" && AUTO_METHODS.has(row.match_method)
+                ? "rounded bg-amber-100 px-1.5 py-0.5 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                : ""
+            }
+          >
+            {METHOD_LABEL[row.match_method]}
+            {row.identity_source && ` · ${SOURCE_LABEL[row.identity_source]}`}
+          </span>
+        )}
         {row.source_filename && <span>{row.source_filename}</span>}
       </div>
 
@@ -243,6 +289,18 @@ function SubmissionRow({ projectId, row }: { projectId: string; row: SubRow }) {
             수정
           </button>
         )}
+        {!editing && !moving && (
+          <button
+            type="button"
+            onClick={() => {
+              setMoveTo("");
+              setMoving(true);
+            }}
+            className={ghostBtn}
+          >
+            다른 학생으로 이동
+          </button>
+        )}
         <button
           type="button"
           disabled={pending}
@@ -282,6 +340,47 @@ function SubmissionRow({ projectId, row }: { projectId: string; row: SubRow }) {
         )}
         {approved && row.storage_path && <span className="text-emerald-600 dark:text-emerald-500">승인됨</span>}
       </div>
+
+      {/* 재귀속 (SPEC 5.4) — 자동 귀속이 틀렸을 때 교사가 바로잡는 경로. 채점·생기부는 재계산이 필요해진다. */}
+      {moving && (
+        <div className="mt-2 flex flex-wrap items-center gap-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs dark:border-amber-800 dark:bg-amber-950">
+          <span className="text-amber-800 dark:text-amber-300">옮길 학생</span>
+          <select
+            value={moveTo}
+            onChange={(e) => setMoveTo(e.target.value)}
+            className={inputClass}
+          >
+            <option value="">— 선택 —</option>
+            {students
+              .filter((s) => s.id !== row.student_id)
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.student_number ? `${s.student_number} ` : ""}
+                  {s.name}
+                </option>
+              ))}
+          </select>
+          <button
+            type="button"
+            disabled={pending || !moveTo}
+            onClick={() =>
+              act(async () => {
+                await reassignSubmission(projectId, row.id, moveTo);
+                setMoving(false);
+              })
+            }
+            className={ghostBtn}
+          >
+            {pending ? "이동 중…" : "이동"}
+          </button>
+          <button type="button" onClick={() => setMoving(false)} className={ghostBtn}>
+            취소
+          </button>
+          <span className="text-amber-700 dark:text-amber-400">
+            이동하면 채점·생기부를 다시 계산해야 합니다.
+          </span>
+        </div>
+      )}
 
       {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
     </li>

@@ -6,6 +6,9 @@ import { ConfirmQueue, type QueueItem } from "@/components/projects/submissions/
 import { StudentSubmissions, type SubRow } from "@/components/projects/submissions/student-submissions";
 import type { Submission } from "@/lib/supabase/types";
 
+// runMatching이 미식별 제출물마다 LLM을 1회 호출한다(최대 20건, 동시 4). 기본 타임아웃으로는 모자란다.
+export const maxDuration = 60;
+
 // Phase 1(b) 매칭·확인 큐·제출물 상세 (SPEC 5.2·5.4, INV-5).
 export default async function SubmissionsPage({
   params,
@@ -32,7 +35,7 @@ export default async function SubmissionsPage({
     supabase
       .from("submissions")
       .select(
-        "id, student_id, source_filename, source_type, content_text, match_status, match_method, match_candidates, pending_content, include_in_eval, include_in_record, storage_path, extraction_approved_at, raw_student_no, raw_student_name, created_at",
+        "id, student_id, source_filename, source_type, content_text, match_status, match_method, identity_source, match_candidates, pending_content, include_in_eval, include_in_record, storage_path, extraction_approved_at, raw_student_no, raw_student_name, created_at",
       )
       .eq("project_id", id)
       .order("created_at", { ascending: true }),
@@ -65,6 +68,7 @@ export default async function SubmissionsPage({
       source_type: s.source_type,
       content_text: s.content_text,
       match_method: s.match_method,
+      identity_source: s.identity_source,
       include_in_eval: s.include_in_eval,
       include_in_record: s.include_in_record,
       storage_path: s.storage_path,
@@ -82,8 +86,9 @@ export default async function SubmissionsPage({
         </Link>
         <h1 className="mt-3 text-2xl font-bold">매칭 · 확인</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          업로드된 제출물을 학생에게 귀속시킵니다. 학번이 있으면 자동, 이름만 있거나 식별이
-          안 되면 반드시 교사가 확인합니다(동명이인 보호).
+          업로드된 제출물을 학생에게 귀속시킵니다. 명단과 모호하지 않게 일치하면 자동으로
+          귀속하고, 동명이인·식별 불가만 아래 큐에서 확인합니다. 자동 귀속이 틀렸다면 학생별
+          제출물에서 다른 학생으로 옮길 수 있습니다.
           <Link
             href={`/projects/${project.id}/ingest`}
             className="ml-1 underline underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"

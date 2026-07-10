@@ -152,13 +152,18 @@ export type MatchStatus =
   | "confirmed"
   | "update_pending";
 
-// 귀속 경로 (세션 6, 마이그레이션 0005). 미귀속/대기 시 NULL.
+// 귀속 경로 (0005, 0011로 확장). 미귀속/대기 시 NULL.
 export type MatchMethod =
-  | "auto_number"
-  | "auto_new_number"
+  | "auto_number" // 학번이 명단과 완전 일치
+  | "auto_name" // 이름이 명단에 정확히 1명만 일치 (0011)
+  | "auto_new_number" // column 출처 신규 학번 → 학생 자동 생성
   | "confirmed_existing"
   | "confirmed_new"
-  | "manual";
+  | "manual"
+  | "reassigned"; // 교사가 다른 학생으로 이동 (0011)
+
+// 매칭에 쓴 학번·이름의 출처 (0011, SPEC 5.2).
+export type IdentitySource = "column" | "filename" | "llm";
 
 export type Submission = {
   id: string;
@@ -174,6 +179,7 @@ export type Submission = {
   storage_path: string | null;
   match_status: MatchStatus;
   match_method: MatchMethod | null;
+  identity_source: IdentitySource | null;
   match_candidates: unknown;
   pending_content: unknown;
   include_in_eval: boolean;
@@ -421,6 +427,7 @@ export type Database = {
           storage_path?: string | null;
           match_status?: MatchStatus;
           match_method?: MatchMethod | null;
+          identity_source?: IdentitySource | null;
           match_candidates?: unknown;
           pending_content?: unknown;
           include_in_eval?: boolean;
@@ -435,6 +442,7 @@ export type Database = {
             | "student_id"
             | "match_status"
             | "match_method"
+            | "identity_source"
             | "match_candidates"
             | "pending_content"
             | "storage_path"

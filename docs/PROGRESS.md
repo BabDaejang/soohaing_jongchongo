@@ -284,6 +284,18 @@
 - ⚠️ **인계**: Tongsa 프로젝트의 `model_routing`은 provider=openai + model=`claude-*`로 저장돼 있다(구 자유 입력 UI의 산물). 새 UI에서 4개 용도의 모델을 다시 고르고 저장해야 Phase 2/3가 동작한다.
 - ⚠️ **인계**: OCR 모델 선택기(`OcrModelSelect`)는 정적 `VISION_MODELS` 유지(비전 가능 판별 불가). 라우팅 화면과 달리 키 없는 프로바이더도 노출된다 — 동일 처리를 원하면 후속 세션에서.
 
+## 매칭 자동화 + 재귀속 — 2026-07-11 (사용자 요청, SPEC 5.2 개정 승인) ✅ 완료(자동 구간) / ⏳ 브라우저 매칭 실행 사용자 확인 대기
+
+- [x] **원인 규명**: "일일이 승인이 힘들다"의 근본 원인은 승인 UI가 아니라 식별값 부재였다. `auto_matched`는 이미 큐를 건너뛰지만, 개별 파일(docx·pdf·이미지) 업로드가 `raw_student_no/name`을 하드코딩 `null`로 넣어(ingest/actions.ts) 전부 "식별 불가"로 분류 → 파일 수만큼 LLM 후보 조회 + 교사 수동 선택. 대조할 식별값이 없어 자동화 대상 자체가 없었음.
+- [x] **SPEC 5.2 개정**(사용자 승인): 자동 귀속을 "학번 일치"에서 "명단과 모호하지 않게 일치"로 확대(학번 완전 일치 + 이름 유일 일치). 식별값 3경로(column/filename/llm)와 출처 기록, 재귀속 추가. SPEC 5.4에 재귀속 항목. DATA_MODEL 8절 갱신.
+- [x] **마이그레이션 0011** `submissions.identity_source text check(column/filename/llm)` — pooler 경유 **적용·검증 완료**. 백필: 기존 158행(raw_student_no/name 보유)을 `column`으로. match_method 값 확장(auto_name·reassigned)은 0005가 check 제약 없이 도입해 DDL 불필요.
+- [x] `lib/matching.ts` 재작성: `classifyMatch`(auto_name·number_conflict·number_unknown 추가, identitySource 인자) + `deriveIdentityFromFilename`(파일명×명단 교차 대조, 숫자/한글 토큰 경계, 2명 이상 걸리면 포기) + `containsToken`·`fileBasename` 순수 함수.
+- [x] `runMatching` 재작성: 열 → 파일명 → LLM(문서 앞부분 1500자, 명단 학생 1명 지목, 환각 응답 폐기) 순으로 식별값 확보 후 분류. LLM 실행당 20건 상한·동시 4·건별 실패 격리. 신규 학생 자동 생성은 column 출처에 한정(유령 학생 방지).
+- [x] `reassignSubmission` 액션 — [다른 학생으로 이동] select, audit `submission.reassign`(이전/이후 student_id), needs_recalc는 기존 트리거가 자동 세움.
+- [x] UI: 매칭 요약(학번/이름/신규/대기 + 파일명·LLM 출처 + 상한 초과 재실행 안내), 학생별 제출물에 귀속 경로·출처 배지(LLM 자동 귀속은 앰버 강조)·[다른 학생으로 이동], 확인 큐에 대기 사유 표시(동명이인 N명/학번 오타 의심/명단 미일치/식별 불가). `/submissions` maxDuration=60.
+- [x] `tests/matching.test.ts` 19건(구 "이름 1명이여도 자동 금지" 수용 2 반전, 파일명 교차 대조 신규 다수) — `npm test` **97/97**. typecheck·lint·build 통과.
+- ⚠️ **브라우저 매칭 실행 미검증(인계)**: 순수 함수(파일명 대조·분류)는 97건으로 검증했으나, 실제 파일 업로드 → 매칭 실행(LLM 호출 포함) → 배지·큐 표시 → 재귀속의 전 구간은 Google 로그인·LLM 비용이 필요해 에이전트가 라이브 구동하지 못함. 배포 후 사용자 확인 필요. LLM 매칭은 유효 키·모델 라우팅이 선행돼야 동작(위 모델 목록 인계 참조).
+
 ### 배포 전 사용자 수행 필요(인계)
 
 - `docs/SMOKE_TEST.md` [B] 브라우저 15단계(2번째 Google 계정으로 가입→대기→승인→업로드→매칭→평가→생성→표 편집→재로그인 복원) 수행·결과 기록.

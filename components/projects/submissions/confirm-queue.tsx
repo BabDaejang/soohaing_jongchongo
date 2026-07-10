@@ -25,6 +25,22 @@ export type QueueItem = {
   raw_student_name: string | null;
 };
 
+// 큐에 남는 건 애매한 것뿐이다 (SPEC 5.2). 왜 자동 처리되지 않았는지 알려줘야 교사가 판단할 수 있다.
+// 사유는 저장하지 않고 후보 수·식별값 유무에서 파생한다 — classifyMatch의 pending reason과 같은 갈래.
+function pendingReasonLabel(item: QueueItem, candidateCount: number): string {
+  if (item.raw_student_no) {
+    return candidateCount > 0
+      ? "학번이 명단에 없는데 이름은 다른 학생과 일치 — 학번 오타 의심"
+      : "학번이 명단에 없음";
+  }
+  if (item.raw_student_name) {
+    return candidateCount > 1
+      ? `동명이인 ${candidateCount}명 — 자동 귀속하지 않았습니다`
+      : "이름이 명단에 없음";
+  }
+  return "학번·이름을 찾지 못했습니다";
+}
+
 const inputClass =
   "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100";
 const primaryBtn =
@@ -104,7 +120,9 @@ function QueueRow({
             내용 변경 대기
           </span>
         ) : (
-          <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">확인 대기</span>
+          <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
+            {pendingReasonLabel(item, candidates.length)}
+          </span>
         )}
         {(item.raw_student_no || item.raw_student_name) && (
           <span>

@@ -155,7 +155,8 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | source_filename | text | | 원본 파일명 |
 | storage_path | text | | Storage 임시 버킷 경로. 삭제 후 NULL |
 | match_status | text | not null default 'unmatched', check in ('unmatched','auto_matched','pending_confirm','confirmed','update_pending') | 세션 5 스테이징=unmatched / (a)학번 일치=auto_matched / (b)(c)=pending_confirm / 교사 확정=confirmed / 재업로드 내용 변경=update_pending. **'unmatched' 세션 5 도입** (DECISIONS 2026-07-08) |
-| match_method | text | | 귀속 경로(세션 6, 마이그레이션 0005): auto_number(기존 학번 일치)·auto_new_number(신규 학번 자동 생성)·confirmed_existing·confirmed_new·manual. 미귀속/대기 시 NULL. **세션 6 도입** (DECISIONS 2026-07-08) |
+| match_method | text | | 귀속 경로(0005, 0011로 확장): auto_number(학번 일치)·auto_name(이름 유일 일치)·auto_new_number(column 출처 신규 학번)·confirmed_existing·confirmed_new·manual·reassigned(교사가 다른 학생으로 이동). 미귀속/대기 시 NULL |
+| identity_source | text | check in ('column','filename','llm') | 매칭에 쓴 학번·이름의 출처(0011, SPEC 5.2). column=스프레드시트 열, filename=파일명×명단 교차 대조, llm=문서 내용 추출. 수동·미확보 시 NULL |
 | match_candidates | jsonb | | 확인 대기 큐용 후보: `[{student_id, name, student_number}]` (세션 6, 이름 일치 후보). LLM 후보 제안은 지연 실행되어 큐에서 즉석 표시 |
 | pending_content | jsonb | | update_pending일 때 새 내용·해시 보관 (교사 승인 전 원본 유지 — 자동 덮어쓰기 금지) |
 | include_in_eval | boolean | not null default true | 평가 반영 체크박스 |
@@ -165,7 +166,8 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 
 - 중복 감지 로직(세션 5): 업로드 시 `(project_id, 학생 식별값(raw_student_no/name), submission_key)`로 기존 행 조회 → content_hash 동일하면 스킵, 다르면 `match_status='update_pending'` + pending_content에 보관. 하드 unique 제약 대신 애플리케이션 로직(조회용 인덱스만) — update_pending 스테이징을 허용하기 위해 (DECISIONS 2026-07-08).
 - 세션 5는 매칭을 하지 않는다: 모든 파싱 행 `student_id NULL`·`match_status='unmatched'`. 매칭은 세션 6.
-- 매칭(세션 6, SPEC 5.2): 순수 함수 `classifyMatch`가 **학번(raw_student_no)이 있을 때만** 자동 귀속(auto_matched). 이름만/식별값 없음은 무조건 pending_confirm(동명이인 보호) — 학번 없는 자동 귀속 경로가 구조적으로 부재. 신규 학번은 학생 자동 생성(SPEC 5.2-d). LLM 후보 제안은 확인 큐에서 지연 실행(callLLM purpose='매칭').
+- 매칭(SPEC 5.2, 0011로 개정): `runMatching`이 식별값을 확보(column → filename×명단 교차 대조 → LLM 추출)한 뒤 순수 함수 `classifyMatch`로 분류한다. 자동 귀속은 **학번 완전 일치** 또는 **이름이 명단에 정확히 1명만 일치**할 때. 동명이인(2명 이상)·명단 미일치·학번 충돌·식별 불가는 pending_confirm. 신규 학생 자동 생성은 `identity_source='column'`이고 이름 충돌이 없을 때만(파일명·LLM 유래 학번으로는 학생을 만들지 않는다 — 유령 학생 방지). LLM 후보 제안은 확인 큐에서 지연 실행(callLLM purpose='매칭').
+- 재귀속(SPEC 5.4): `reassignSubmission`이 `student_id` 변경 + `match_status='confirmed'` + `match_method='reassigned'`. audit_logs에 이전/이후 student_id 기록. `flag_project_needs_recalc` 트리거가 "재계산 필요" 배지를 자동으로 세운다.
 - 원본 삭제(세션 6, INV-5): `deleteOriginal` 서버 액션이 `extraction_approved_at IS NULL`이면 거부. Storage 삭제는 API 경로라 DB 트리거로 못 막으므로 액션 가드가 강제 지점. 공유 storage_path(스프레드시트)는 다른 제출물이 참조하면 객체 유지. N일 자동 삭제는 `/api/cron/purge-originals`(CRON_SECRET) + `isPurgeEligible`(미승인 항상 제외).
 - **RLS**(세션 5 마이그레이션 0004): select = `owns_project()` or admin, insert/update/delete = `owns_project()` and 승인됨. Storage 버킷 `originals`(비공개)는 경로 첫 세그먼트(owner_id)=auth.uid() 소유자 정책. 경로는 `{owner_id}/{project_id}/{fileUuid}__{filename}` — 스프레드시트 1파일→다행이라 submission_id를 경로에 못 씀 (DECISIONS 2026-07-08).
 
