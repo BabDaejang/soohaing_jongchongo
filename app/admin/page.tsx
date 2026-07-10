@@ -4,7 +4,7 @@ import { SignOutButton } from "@/components/sign-out-button";
 import { AccountList } from "@/components/admin/account-list";
 import { WaitingMessageEditor } from "@/components/admin/waiting-message-editor";
 import { ProviderManager } from "@/components/admin/provider-manager";
-import type { Profile, Provider } from "@/lib/supabase/types";
+import type { KeyStatus, Profile, Provider } from "@/lib/supabase/types";
 
 // 관리자 패널 (SPEC 2·3절). 접근 제어는 proxy.ts가 강제한다(admin만).
 export default async function AdminPage() {
@@ -20,11 +20,11 @@ export default async function AdminPage() {
       .select("value")
       .eq("key", "waiting_message")
       .maybeSingle(),
-    supabase.from("providers").select("*").order("created_at", { ascending: true }),
-    // 기본 키(owner_id NULL)의 마스킹 정보만 — encrypted_key는 절대 select 하지 않는다.
+    supabase.from("providers").select("*").order("name"),
+    // 기본 키(owner_id NULL)의 마스킹 정보와 모델 목록만 — encrypted_key는 절대 select 하지 않는다.
     supabase
       .from("api_keys")
-      .select("provider_id, key_last4")
+      .select("provider_id, key_last4, models, models_synced_at")
       .is("owner_id", null),
   ]);
 
@@ -32,9 +32,13 @@ export default async function AdminPage() {
   const providers: Provider[] = providersRes.data ?? [];
   const waitingMessage =
     typeof settingRes.data?.value === "string" ? settingRes.data.value : "";
-  const defaultKeyLast4 = new Map<string, string>();
+  const defaultKeys: Record<string, KeyStatus> = {};
   for (const row of keysRes.data ?? []) {
-    if (row.key_last4) defaultKeyLast4.set(row.provider_id, row.key_last4);
+    defaultKeys[row.provider_id] = {
+      last4: row.key_last4,
+      models: row.models ?? [],
+      syncedAt: row.models_synced_at,
+    };
   }
 
   return (
@@ -67,10 +71,7 @@ export default async function AdminPage() {
 
         <section>
           <h2 className="mb-3 text-lg font-semibold">프로바이더 · 기본 API 키</h2>
-          <ProviderManager
-            providers={providers}
-            defaultKeyLast4={Object.fromEntries(defaultKeyLast4)}
-          />
+          <ProviderManager providers={providers} defaultKeys={defaultKeys} />
         </section>
       </div>
     </main>

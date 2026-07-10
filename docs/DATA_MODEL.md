@@ -77,11 +77,14 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | owner_id | uuid | FK → profiles(id) on delete cascade, **NULL 허용** | NULL = 관리자 등록 기본 키 |
 | encrypted_key | text | not null | AES-256-GCM 암호문 (iv·tag 포함 인코딩). 키는 env `APP_ENCRYPTION_KEY` |
 | key_last4 | text | not null | 마스킹 표시용 끝 4자리 |
+| models | jsonb | not null default '[]' | 이 키로 조회한 모델 ID 문자열 배열 (SPEC 3절) |
+| models_synced_at | timestamptz | | 모델 목록을 마지막으로 조회한 시각 |
 | created_at | timestamptz | not null default now() | |
 | updated_at | timestamptz | | |
 
 - unique 제약: `(provider_id, owner_id)` — 사용자당 프로바이더별 1키. 기본 키(owner_id NULL)도 프로바이더별 1키 (partial unique index `where owner_id is null`).
 - 키 해석 순서(서버 전용 로직): 개인 키 존재 → 개인 키, 없으면 기본 키.
+- `models`는 키에 종속된다 — 같은 프로바이더라도 키(조직·요금제)에 따라 접근 가능한 모델이 다르기 때문. 키 등록 시 조회해 저장하고, [모델 갱신]으로 재조회한다.
 - **RLS**: 개인 키는 본인만 CRUD. 기본 키(owner_id NULL)는 admin만 CRUD. **`encrypted_key` 컬럼은 클라이언트 쿼리에 절대 노출하지 않는다** — select 정책은 두되, 클라이언트용 뷰/쿼리는 `key_last4`만 반환하고 복호화는 서버(service role 또는 Server Action)에서만 수행.
 - 평문 저장·로그 출력 금지 (SPEC 3절).
 

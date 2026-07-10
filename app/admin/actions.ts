@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit";
 import { encrypt, keyLast4 } from "@/lib/crypto";
+import { validateKeyAndListModels, refreshKeyModels } from "@/lib/llm/key-sync";
 import type { ApiFormat } from "@/lib/supabase/types";
 
 // ── 계정 승인/거부/삭제 ──────────────────────────────────────────────
@@ -117,35 +118,60 @@ export async function addProvider(formData: FormData) {
 
 // ── 기본 API 키 등록/변경/삭제 (owner_id NULL) ────────────────────────
 
-export async function setDefaultKey(formData: FormData) {
+// 등록·갱신은 프로바이더 API 호출을 동반하므로 실패가 정상 경로다 (SPEC 3절 키 검증).
+export type KeyActionState = { ok: boolean; message: string } | null;
+
+function failureMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "알 수 없는 오류가 발생했습니다.";
+}
+
+export async function setDefaultKey(
+  _prev: KeyActionState,
+  formData: FormData,
+): Promise<KeyActionState> {
   const { userId: actorId } = await requireAdmin();
   const providerId = String(formData.get("providerId"));
   const rawKey = String(formData.get("apiKey") ?? "").trim();
-  if (!rawKey) throw new Error("API 키를 입력하세요.");
+  if (!rawKey) return { ok: false, message: "API 키를 입력하세요." };
+
+  // 저장 전에 모델 목록을 조회해 키 유효성을 검증하고, 그 목록을 함께 저장한다.
+  let models: string[];
+  try {
+    models = await validateKeyAndListModels(providerId, rawKey);
+  } catch (error) {
+    return { ok: false, message: failureMessage(error) };
+  }
 
   const supabase = await createClient();
   const encrypted_key = encrypt(rawKey);
   const key_last4 = keyLast4(rawKey);
+  const models_synced_at = new Date().toISOString();
 
   // 기본 키는 프로바이더별 1행(owner_id NULL). 존재하면 갱신, 없으면 삽입.
-  const { data: existing } = await supabase
+  const { data: existing, error: selectError } = await supabase
     .from("api_keys")
     .select("id")
     .eq("provider_id", providerId)
     .is("owner_id", null)
     .maybeSingle();
+  if (selectError) return { ok: false, message: selectError.message };
 
   if (existing) {
     const { error } = await supabase
       .from("api_keys")
-      .update({ encrypted_key, key_last4 })
+      .update({ encrypted_key, key_last4, models, models_synced_at })
       .eq("id", existing.id);
-    if (error) throw new Error(error.message);
+    if (error) return { ok: false, message: error.message };
   } else {
-    const { error } = await supabase
-      .from("api_keys")
-      .insert({ provider_id: providerId, owner_id: null, encrypted_key, key_last4 });
-    if (error) throw new Error(error.message);
+    const { error } = await supabase.from("api_keys").insert({
+      provider_id: providerId,
+      owner_id: null,
+      encrypted_key,
+      key_last4,
+      models,
+      models_synced_at,
+    });
+    if (error) return { ok: false, message: error.message };
   }
 
   await writeAuditLog({
@@ -153,9 +179,35 @@ export async function setDefaultKey(formData: FormData) {
     action: "api_key.set",
     entity: "api_keys",
     entityId: providerId,
-    detail: { scope: "default", last4: key_last4 }, // 평문 금지 — 끝 4자리만
+    detail: { scope: "default", last4: key_last4, models: models.length }, // 평문 금지 — 끝 4자리만
   });
   revalidatePath("/admin");
+  return { ok: true, message: `키를 확인했습니다. 모델 ${models.length}개를 불러왔습니다.` };
+}
+
+export async function refreshDefaultKeyModels(
+  _prev: KeyActionState,
+  formData: FormData,
+): Promise<KeyActionState> {
+  const { userId: actorId } = await requireAdmin();
+  const providerId = String(formData.get("providerId"));
+
+  let models: string[];
+  try {
+    models = await refreshKeyModels(providerId, null);
+  } catch (error) {
+    return { ok: false, message: failureMessage(error) };
+  }
+
+  await writeAuditLog({
+    actorId,
+    action: "api_key.models_refresh",
+    entity: "api_keys",
+    entityId: providerId,
+    detail: { scope: "default", models: models.length },
+  });
+  revalidatePath("/admin");
+  return { ok: true, message: `모델 ${models.length}개로 갱신했습니다.` };
 }
 
 export async function deleteDefaultKey(formData: FormData) {

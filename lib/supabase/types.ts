@@ -46,8 +46,17 @@ export type ApiKey = {
   owner_id: string | null; // NULL = 관리자 등록 기본 키
   encrypted_key: string;
   key_last4: string;
+  models: string[]; // 이 키로 조회한 모델 ID 목록 (SPEC 3절)
+  models_synced_at: string | null;
   created_at: string;
   updated_at: string | null;
+};
+
+// api_keys 행 중 화면에 노출해도 되는 부분 (평문·암호문 제외). 계정 옵션·관리자 패널 공용.
+export type KeyStatus = {
+  last4: string;
+  models: string[];
+  syncedAt: string | null;
 };
 
 // audit_logs (DATA_MODEL 14절, append-only). insert는 service role 전용.
@@ -316,8 +325,15 @@ export type Database = {
           owner_id?: string | null;
           encrypted_key: string;
           key_last4: string;
+          models?: string[];
+          models_synced_at?: string | null;
         };
-        Update: Partial<Pick<ApiKey, "encrypted_key" | "key_last4">>;
+        Update: Partial<
+          Pick<
+            ApiKey,
+            "encrypted_key" | "key_last4" | "models" | "models_synced_at"
+          >
+        >;
         Relationships: [];
       };
       audit_logs: {

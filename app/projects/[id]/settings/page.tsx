@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { requireApproved } from "@/lib/auth";
+import { listRoutableProviders } from "@/lib/llm/available";
 import { SettingsForm } from "@/components/projects/settings-form";
 import { ModelRoutingForm } from "@/components/projects/model-routing-form";
 
@@ -11,9 +13,11 @@ export default async function ProjectSettingsPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  const { userId } = await requireApproved();
   const supabase = await createClient();
 
-  const [{ data: project }, { data: providers }] = await Promise.all([
+  // 라우팅 후보는 "이 사용자가 쓸 수 있는 키가 있는 프로바이더"다 (개인 키 우선, 없으면 기본 키).
+  const [{ data: project }, providers] = await Promise.all([
     supabase
       .from("projects")
       .select(
@@ -21,7 +25,7 @@ export default async function ProjectSettingsPage({
       )
       .eq("id", id)
       .maybeSingle(),
-    supabase.from("providers").select("id, name, api_format").order("name"),
+    listRoutableProviders(userId),
   ]);
   if (!project) notFound();
 
@@ -46,7 +50,7 @@ export default async function ProjectSettingsPage({
         <ModelRoutingForm
           projectId={project.id}
           routing={project.model_routing}
-          providers={providers ?? []}
+          providers={providers}
         />
       </div>
     </main>

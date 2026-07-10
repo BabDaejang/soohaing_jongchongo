@@ -2,7 +2,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { SignOutButton } from "@/components/sign-out-button";
 import { PersonalKeys } from "@/components/account/personal-keys";
-import type { Provider } from "@/lib/supabase/types";
+import type { KeyStatus, Provider } from "@/lib/supabase/types";
 
 // 계정 옵션 — 개인 API 키 관리 (SPEC 3절). 승인된 사용자면 접근 가능(proxy.ts).
 export default async function AccountPage() {
@@ -13,20 +13,31 @@ export default async function AccountPage() {
   } = await supabase.auth.getUser();
 
   const [providersRes, keysRes] = await Promise.all([
-    supabase.from("providers").select("*").order("created_at", { ascending: true }),
-    // 본인 개인 키의 마스킹 정보만 (RLS로 본인 행만 반환). encrypted_key는 select 안 함.
+    supabase.from("providers").select("*").order("name"),
+    // 본인 개인 키의 마스킹 정보와 모델 목록만 (RLS로 본인 행만 반환). encrypted_key는 select 안 함.
     user
       ? supabase
           .from("api_keys")
-          .select("provider_id, key_last4")
+          .select("provider_id, key_last4, models, models_synced_at")
           .eq("owner_id", user.id)
-      : Promise.resolve({ data: [] as { provider_id: string; key_last4: string }[] }),
+      : Promise.resolve({
+          data: [] as {
+            provider_id: string;
+            key_last4: string;
+            models: string[];
+            models_synced_at: string | null;
+          }[],
+        }),
   ]);
 
   const providers: Provider[] = providersRes.data ?? [];
-  const personalKeyLast4: Record<string, string> = {};
+  const personalKeys: Record<string, KeyStatus> = {};
   for (const row of keysRes.data ?? []) {
-    if (row.key_last4) personalKeyLast4[row.provider_id] = row.key_last4;
+    personalKeys[row.provider_id] = {
+      last4: row.key_last4,
+      models: row.models ?? [],
+      syncedAt: row.models_synced_at,
+    };
   }
 
   return (
@@ -51,7 +62,7 @@ export default async function AccountPage() {
 
       <section>
         <h2 className="mb-3 text-lg font-semibold">개인 API 키</h2>
-        <PersonalKeys providers={providers} personalKeyLast4={personalKeyLast4} />
+        <PersonalKeys providers={providers} personalKeys={personalKeys} />
       </section>
     </main>
   );

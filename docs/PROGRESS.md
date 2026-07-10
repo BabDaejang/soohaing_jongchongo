@@ -270,8 +270,24 @@
 - [x] typecheck·lint·build·`npm test`(76/76) 통과. DECISIONS 2026-07-10 기록.
 - 특이사항: 같은 파일의 수정/삭제 폼도 pending 미표시는 동일하나 중복 실행이 데이터 중복을 만들지 않아 범위 제외(공용 SubmitButton 추출은 후속 제안).
 
+## 모델 목록 동적 조회 — 2026-07-10 (사용자 요청, SPEC 3절 확장 승인) ✅ 완료
+
+- [x] **원인 규명**: "OpenAI 모델이 안 보인다"는 유실이 아니라 미구현. openai는 프로바이더 드롭다운에 정상 노출됐고(DB의 `model_routing.provider_id`가 openai UUID로 저장돼 있어 확인), 안 보인 것은 모델 후보였다 — 모델 칸이 `<select>`가 아니라 `<datalist>` 자유 입력이라 브라우저가 입력값(`claude-sonnet-4-6`)으로 후보를 필터링해 `gpt-*`가 하나도 매칭되지 않았다. DECISIONS 2026-07-09에 정적 카탈로그 재사용이 의도적 결정으로 기록돼 있었음.
+- [x] **SPEC 3절 확장**(사용자 승인): 키 검증 → 모델 목록 저장 → [모델 갱신] → 키 있는 프로바이더만 라우팅 선택. DATA_MODEL 4절 갱신.
+- [x] **마이그레이션 0010** `api_keys.models jsonb not null default '[]'` + `models_synced_at` — pooler 경유 **적용·검증 완료**(기존 openai 키 1행은 `models: []` → 화면이 정적 카탈로그로 폴백하고 [모델 갱신] 유도).
+- [x] `lib/llm/models.ts`(서버 전용): 프로바이더별 모델 목록 조회 + 순수 파서(anthropic/openai/google) + OpenAI 채팅 모델 필터. `lib/llm/key-sync.ts`: `validateKeyAndListModels`(등록 시 검증), `refreshKeyModels`(재조회). `lib/llm/available.ts`: `listRoutableProviders`(개인>기본 키 우선, service role, encrypted_key 미select).
+- [x] `setPersonalKey`/`setDefaultKey`를 useActionState로 전환 — 검증 실패를 인라인 표시(오타 하나에 전체 페이지가 죽던 문제 해소). `refreshPersonalKeyModels`/`refreshDefaultKeyModels` 추가, audit `api_key.models_refresh`(평문·목록 미기록, 개수만).
+- [x] 계정 옵션·관리자 패널: 모델 개수·마지막 조회 시각 표시, [모델 갱신] 버튼, 제출 중 비활성.
+- [x] `ModelRoutingForm`: 모델 `<select>` + [직접 입력…], 프로바이더 변경 시 모델 리셋, 키 없는 프로바이더 숨김, 키 전무 시 전체 비활성 + `/account` 안내, 저장된 프로바이더 키가 사라지면 경고.
+- [x] **실 API 라이브 검증**(읽기 전용·무과금): 등록된 openai 키로 `/v1/models` 호출 → 원본 120개 중 56개 제외(임베딩·TTS·whisper·realtime·image·sora·moderation·instruct·codex·search-api) → 64개 통과. `-codex`·`-search-api`는 responses API 전용이라 제외 규칙 추가.
+- [x] `tests/provider-models.test.ts` 8건 추가 — `npm test` **84/84** 통과. typecheck·lint·build 통과. 클라이언트 번들 스캔(.next/static): `x-api-key`·`api.anthropic.com`·`generativelanguage`·`listProviderModels`·`encrypted_key`·`APP_ENCRYPTION_KEY` **0건**(INV-4).
+- ⚠️ **인계**: Tongsa 프로젝트의 `model_routing`은 provider=openai + model=`claude-*`로 저장돼 있다(구 자유 입력 UI의 산물). 새 UI에서 4개 용도의 모델을 다시 고르고 저장해야 Phase 2/3가 동작한다.
+- ⚠️ **인계**: OCR 모델 선택기(`OcrModelSelect`)는 정적 `VISION_MODELS` 유지(비전 가능 판별 불가). 라우팅 화면과 달리 키 없는 프로바이더도 노출된다 — 동일 처리를 원하면 후속 세션에서.
+
 ### 배포 전 사용자 수행 필요(인계)
 
 - `docs/SMOKE_TEST.md` [B] 브라우저 15단계(2번째 Google 계정으로 가입→대기→승인→업로드→매칭→평가→생성→표 편집→재로그인 복원) 수행·결과 기록.
-- 배포 시 Supabase Google 프로바이더 활성화 + Redirect URLs에 배포 도메인 등록, Vercel 환경변수 7종 등록, 마이그레이션 `db push` 적용.
+- ~~Supabase Google 프로바이더 활성화 + Redirect URLs 등록~~ ✅ 배포 도메인에서 로그인 성공으로 확인. ~~마이그레이션 `db push` 적용~~ ✅ 0001~0010 전부 적용 확인.
+- Vercel 환경변수: `APP_ENCRYPTION_KEY`·`SUPABASE_SERVICE_ROLE_KEY` 미등록 탓에 `/account` 키 저장이 500(digest 685131230)이었음 → 사용자가 등록·재배포 후 정상. `CRON_SECRET`은 자동 삭제 Cron을 켤 때 추가(미등록 시 라우트가 503만 반환하고 나머지 기능은 무관).
 - 노출된 OpenAI 키 폐기·재발급 후 `/admin`(기본 키) 또는 `/account`(개인 키)에 재등록.
+- **0010 배포 순서**: 마이그레이션을 먼저 적용해야 `/account`·`/admin`·프로젝트 설정이 뜬다(`models` 컬럼을 select 함). 이미 적용 완료.
