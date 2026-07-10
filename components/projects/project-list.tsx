@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useFormStatus } from "react-dom";
 import Link from "next/link";
 import {
   createProject,
@@ -16,6 +17,20 @@ type ProjectSummary = {
 
 export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
   const [showCreate, setShowCreate] = useState(false);
+  // 서버 응답 대기 중 재제출을 동기적으로 차단. useFormStatus의 pending은
+  // 재렌더 후에야 버튼을 비활성화하므로, 그 사이의 연타는 ref로 막는다
+  // (중복 클릭 1회당 프로젝트 1개가 중복 생성되는 버그 방지).
+  const creatingRef = useRef(false);
+
+  async function handleCreate(formData: FormData) {
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      await createProject(formData);
+    } finally {
+      creatingRef.current = false;
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -33,7 +48,7 @@ export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
 
       {showCreate && (
         <form
-          action={createProject}
+          action={handleCreate}
           className="rounded-lg border border-dashed border-zinc-300 p-4 dark:border-zinc-700"
         >
           <div className="flex flex-col gap-3">
@@ -57,21 +72,7 @@ export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
               />
             </label>
           </div>
-          <div className="mt-3 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setShowCreate(false)}
-              className="rounded-md px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
-            >
-              취소
-            </button>
-            <button
-              type="submit"
-              className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
-            >
-              만들기
-            </button>
-          </div>
+          <CreateFormFooter onCancel={() => setShowCreate(false)} />
         </form>
       )}
 
@@ -87,6 +88,31 @@ export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+// 생성 폼 하단 버튼 — useFormStatus는 form의 자식에서만 pending을 읽을 수 있어 분리.
+// 제출 중에는 취소(폼 언마운트 후 서버에서 생성이 계속 진행돼 혼란)도 함께 막는다.
+function CreateFormFooter({ onCancel }: { onCancel: () => void }) {
+  const { pending } = useFormStatus();
+  return (
+    <div className="mt-3 flex justify-end gap-2">
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={pending}
+        className="rounded-md px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-800 disabled:opacity-60 dark:hover:text-zinc-200"
+      >
+        취소
+      </button>
+      <button
+        type="submit"
+        disabled={pending}
+        className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+      >
+        {pending ? "만드는 중…" : "만들기"}
+      </button>
     </div>
   );
 }

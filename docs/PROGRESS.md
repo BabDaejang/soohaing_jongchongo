@@ -263,6 +263,13 @@
   (6) SheetJS advisory 재검토 결론(업그레이드 완화) DECISIONS.md 기록.
 - 특이사항: xlsx 의존성 소스가 npm→SheetJS CDN tgz로 변경(0.20.3). 라이브 검증 OpenAI 키는 대화 노출로 **회전 권고**(라이브 후 등록 키 삭제·미영속). 브라우저 OAuth 구간은 에이전트 수행 불가 → 사용자 체크리스트 위임(수행하지 않은 구간을 통과처럼 표기하지 않음).
 
+## 핫픽스 — 2026-07-10 (프로젝트 생성 중복 제출 버그) ✅ 완료
+
+- [x] 증상: 생성 폼 '만들기' 클릭 후 서버 액션 응답 지연 동안 UI 피드백이 없어 연타 → 동일 프로젝트가 클릭 수만큼 중복 생성.
+- [x] 수정(`components/projects/project-list.tsx`): ① `CreateFormFooter`(useFormStatus — settings-form의 SubmitButton과 동일 관용구)로 제출 중 만들기·취소 비활성 + "만드는 중…" 표시, ② `handleCreate` 래퍼의 `useRef` 동기 가드로 pending 재렌더 이전의 연타도 액션 레벨에서 차단(중복 POST 미전송).
+- [x] typecheck·lint·build·`npm test`(76/76) 통과. DECISIONS 2026-07-10 기록.
+- 특이사항: 같은 파일의 수정/삭제 폼도 pending 미표시는 동일하나 중복 실행이 데이터 중복을 만들지 않아 범위 제외(공용 SubmitButton 추출은 후속 제안).
+
 ### 배포 전 사용자 수행 필요(인계)
 
 - `docs/SMOKE_TEST.md` [B] 브라우저 15단계(2번째 Google 계정으로 가입→대기→승인→업로드→매칭→평가→생성→표 편집→재로그인 복원) 수행·결과 기록.
