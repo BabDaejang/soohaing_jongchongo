@@ -28,6 +28,7 @@ const OPENAI_EXCLUDE_PARTS = [
   "-instruct", // legacy completions 전용
   "-codex", // responses API 전용
   "-search-api", // responses API 전용
+  "-pro", // responses API 전용 — chat/completions 404 (탐침 C, 2026-07-11)
   "gpt-image",
 ];
 

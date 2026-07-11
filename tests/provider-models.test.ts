@@ -60,6 +60,15 @@ test("isOpenAIChatModel은 프리픽스와 제외 규칙을 모두 본다", () =
   assert.equal(isOpenAIChatModel("gpt-4o-tts"), false); // 제외 규칙
 });
 
+test("-pro 계열은 chat 모델에서 제외된다 (responses API 전용, 탐침 C)", () => {
+  assert.equal(isOpenAIChatModel("gpt-5.5-pro"), false);
+  assert.equal(isOpenAIChatModel("o1-pro"), false);
+  const json = {
+    data: [{ id: "gpt-5.5" }, { id: "gpt-5.5-pro" }, { id: "o1-pro" }],
+  };
+  assert.deepEqual(parseOpenAIModels(json), ["gpt-5.5"]);
+});
+
 test("google 응답에서 generateContent 지원 모델만, models/ 접두사를 떼고 뽑는다", () => {
   const json = {
     models: [

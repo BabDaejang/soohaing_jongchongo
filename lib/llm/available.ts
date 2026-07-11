@@ -1,6 +1,7 @@
 import "server-only";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { ApiFormat } from "@/lib/supabase/types";
+import { isOpenAIChatModel } from "./models";
 
 // 모델 라우팅 화면이 쓰는 "이 사용자가 실제로 호출할 수 있는 프로바이더" 목록 (SPEC 3절).
 // 키 해석 규칙은 resolveApiKey와 같다: 개인 키 우선, 없으면 관리자 기본 키.
@@ -53,11 +54,17 @@ export async function listRoutableProviders(
     const fallback = forProvider.find((k) => k.owner_id === null);
     const chosen = personal ?? fallback;
 
+    // openai 호환은 저장된 목록을 소비 시점에도 재필터한다 — [모델 갱신] 전의
+    // 낡은 저장 목록(-pro 등 chat/completions 불가 모델 포함)을 라우팅 화면에서 걸러낸다.
+    const stored = chosen ? toStringArray(chosen.models) : [];
+    const models =
+      p.api_format === "openai" ? stored.filter((m) => isOpenAIChatModel(m)) : stored;
+
     return {
       id: p.id,
       name: p.name,
       api_format: p.api_format,
-      models: chosen ? toStringArray(chosen.models) : [],
+      models,
       keySource: chosen ? (personal ? "personal" : "default") : null,
     };
   });
