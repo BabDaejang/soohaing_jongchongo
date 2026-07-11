@@ -303,3 +303,21 @@
 - Vercel 환경변수: `APP_ENCRYPTION_KEY`·`SUPABASE_SERVICE_ROLE_KEY` 미등록 탓에 `/account` 키 저장이 500(digest 685131230)이었음 → 사용자가 등록·재배포 후 정상. `CRON_SECRET`은 자동 삭제 Cron을 켤 때 추가(미등록 시 라우트가 503만 반환하고 나머지 기능은 무관).
 - 노출된 OpenAI 키 폐기·재발급 후 `/admin`(기본 키) 또는 `/account`(개인 키)에 재등록.
 - **0010 배포 순서**: 마이그레이션을 먼저 적용해야 `/account`·`/admin`·프로젝트 설정이 뜬다(`models` 컬럼을 select 함). 이미 적용 완료.
+
+## 리팩토링 — 채점 전멸 수정 + 실행 관찰가능성 (2026-07-11, 배치 1~4) ✅ 완료(자동 구간) / ⏳ 브라우저 실검증 사용자 대기
+
+> 상세 진행·인계는 `docs/리팩토링_프로그레스.md`, 설계 판단은 `docs/DECISIONS.md`(2026-07-11 리팩토링 배치 1~4). 실행 지시서는 `docs/리팩토링.md`(v2, 배치 4개).
+
+- **원인**: 채점 158건이 두 차례 전멸했으나 화면에 사유가 없었다. ① OpenAI 어댑터가 gpt-5·o 계열이 거부하는 legacy 파라미터(`max_tokens`·`temperature`)를 전송(탐침 A/D 400) ② generate/verify의 `gpt-5.5-pro`는 chat 모델 아님(탐침 C 404) ③ 에러가 `catch {}`에서 버려짐 ④ 전건을 한 서버 액션에서 돌려 진행 표시·중단 불가 + 성공 시 타임아웃 확정.
+- **배치 1**(어댑터·모델 선별·라우팅): OpenAI 어댑터를 계열 분기(`isOpenAIReasoningFamily`→`max_completion_tokens`, temperature 생략)로 현대화 + 빈 응답 throw(무음 0점 저장 방어), 모델 카탈로그 `-pro` 제외 + 소비 시점 재필터, Tongsa generate·verify를 `gpt-4o-mini`로(DB). 신규 테스트 `tests/openai-params.test.ts`.
+- **배치 2**(실행 터미널·채점 전환): 공용 `useSequentialRun` 훅 + 표시 전용 `RunTerminal`(로그·크기조절·일시정지/재개/긴급중단·서킷 브레이커 연속 3실패). `runEvaluation`→`prepareEvaluation`·`evaluateOne`·`finalizeEvaluation` 3분할(클라이언트 구동 1건 실행, 에러 원문 300자 노출, INV-2로 id만 받고 서버가 루브릭 재조립). 평가 화면 모델 배지 + `maxDuration=120`.
+- **배치 3**(매칭 전환·records 배지): `runMatching`(20건 상한)→`prepareMatching`·`matchOneByLlm`·`finalizeMatching` 3분할(상한 소멸, 결정적 규칙은 prepare 일괄·LLM 건만 1건 실행), `matching-panel` 개편 + extract 모델 배지. records 화면에 생성·검증 모델 배지.
+- **배치 4**(SPEC·최종 검증): SPEC 6절 temperature 문구 완화 + 채점 실행 터미널·중단·증분 명문화, SPEC 5.2 매칭 1건 단위 실행 명문화. 최종 검증 전부 통과(`npm test` 102/102·tsc·eslint·next build 19라우트) + **INV-4 번들 스캔 7종 전부 0건**. DATA_MODEL·DB 스키마 변경 없음.
+
+### 배포 후 사용자 체크리스트 (에이전트 미수행 — OAuth·LLM 과금 필요)
+
+1. **[모델 갱신]**: `/account`(또는 `/admin` 기본 키) → openai 키의 [모델 갱신] 1회 → 저장 모델 목록에서 `-pro`가 사라지고, 프로젝트 설정 라우팅 목록에도 `-pro`·이미지·음성 계열이 나타나지 않음 확인(수용 4).
+2. **모델 배지**: 평가 화면 "평가 모델: {provider}/{model}", 매칭 화면 "추출·매칭 모델: …", records 화면 "생성/검증 모델: …" 표시 확인(요구 ②).
+3. **(선택) 비용 절감**: 프로젝트 설정에서 evaluate를 `gpt-4o-mini` 등 저비용 chat 모델로 변경(현재 Tongsa evaluate는 gpt-5 계열 — 배치 1 어댑터로 정상 호출되나 지연·비용 큼).
+4. **채점 실행**: [채점 실행] → 실행 터미널 로그 흐름(prelude→건별→finalize) 실시간 확인, **일시정지→재개→긴급 중단** 동작, 중단 후 재실행 시 이미 채점된 건 제외하고 증분 이어감(수용 2·3). 오늘 같은 실패라면 터미널에 `'max_tokens' is not supported…` 원문이 보이고 연속 3건에서 자동 중단(수용 1). 로그 창 우하단 핸들로 크기 조절.
+5. **매칭 실행**: [매칭 실행] → 결정적 처리(prelude) + LLM 대상 건별 실행, 중단·재개·재실행(미매칭만 이어감). 자동 귀속·큐 결과는 학생별 제출물 배지·확인 큐에서 확인, 틀렸으면 [다른 학생으로 이동].
