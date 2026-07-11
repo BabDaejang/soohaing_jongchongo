@@ -6,7 +6,7 @@ import { ConfirmQueue, type QueueItem } from "@/components/projects/submissions/
 import { StudentSubmissions, type SubRow } from "@/components/projects/submissions/student-submissions";
 import type { Submission } from "@/lib/supabase/types";
 
-// runMatching이 미식별 제출물마다 LLM을 1회 호출한다(최대 20건, 동시 4). 기본 타임아웃으로는 모자란다.
+// 매칭은 LLM 추정이 필요한 건만 클라이언트가 1건씩 호출하지만, prepare의 결정적 처리·조회에 여유를 둔다.
 export const maxDuration = 60;
 
 // Phase 1(b) 매칭·확인 큐·제출물 상세 (SPEC 5.2·5.4, INV-5).
@@ -20,10 +20,17 @@ export default async function SubmissionsPage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name")
+    .select("id, name, model_routing")
     .eq("id", id)
     .maybeSingle();
   if (!project) notFound();
+
+  // 추출·매칭 모델 배지(요구 ②): 라우팅의 extract 대상 + 프로바이더명(매칭은 추출과 같은 키).
+  const extractTarget = project.model_routing.extract;
+  const { data: providers } = await supabase.from("providers").select("id, name");
+  const providerName =
+    providers?.find((p) => p.id === extractTarget?.provider_id)?.name ?? "알 수 없음";
+  const extractModel = extractTarget?.model ?? "미설정";
 
   const [studentsRes, submissionsRes] = await Promise.all([
     supabase
@@ -99,7 +106,12 @@ export default async function SubmissionsPage({
       </header>
 
       <section className="mb-8">
-        <MatchingPanel projectId={project.id} unmatchedCount={unmatchedCount} />
+        <MatchingPanel
+          projectId={project.id}
+          unmatchedCount={unmatchedCount}
+          providerName={providerName}
+          model={extractModel}
+        />
       </section>
 
       <section className="mb-10">

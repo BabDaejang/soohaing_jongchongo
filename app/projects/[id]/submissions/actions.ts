@@ -10,6 +10,7 @@ import {
   classifyMatch,
   deriveIdentityFromFilename,
   type IdentitySource,
+  type PendingReason,
   type StudentRef,
 } from "@/lib/matching";
 import { deleteOriginalObject } from "@/lib/originals";
@@ -36,27 +37,13 @@ async function loadRouting(supabase: Client, projectId: string): Promise<ModelRo
 
 const SPREADSHEET_TYPES: ReadonlySet<SubmissionSourceType> = new Set(["xlsx", "csv"]);
 
-// LLM 추출은 파일 1건당 1회 호출이다. 한 번의 실행이 서버리스 타임아웃에 걸리지 않도록
-// 상한을 두고, 남은 건수는 요약에 알려 재실행을 유도한다.
-const LLM_BUDGET_PER_RUN = 20;
-const LLM_CONCURRENCY = 4;
-
-export type MatchingSummary = {
-  autoNumber: number; // 학번 일치 자동 귀속
-  autoName: number; // 이름 유일 일치 자동 귀속
-  newStudents: number; // 신규 학번으로 자동 생성된 학생
-  pending: number; // 확인 대기 큐로 보낸 건수
-  fromFilename: number; // 파일명에서 식별값을 얻은 건수
-  fromLlm: number; // LLM 추출로 식별값을 얻은 건수
-  llmRemaining: number; // 상한 초과로 이번에 처리하지 못한 건수
-};
-
 type PendingSub = {
   id: string;
   raw_student_no: string | null;
   raw_student_name: string | null;
   source_type: SubmissionSourceType;
   source_filename: string | null;
+  submission_key: string | null;
   identity_source: IdentitySource | null;
 };
 
@@ -65,24 +52,6 @@ type Identity = {
   name: string | null;
   source: IdentitySource | null;
 };
-
-// 동시성 제한 map — LLM 호출을 4개씩 굴린다.
-async function mapPool<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const out = new Array<R>(items.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const i = next++;
-      out[i] = await fn(items[i]);
-    }
-  });
-  await Promise.all(workers);
-  return out;
-}
 
 // 문서 앞부분을 읽어 명단의 학생 한 명을 지목한다. 명단에 없는 응답은 버린다(환각 방지).
 async function extractIdentityByLLM(
@@ -136,8 +105,152 @@ async function extractIdentityByLLM(
   return roster.find((s) => s.id === id) ?? null; // 명단에 없는 id는 무시
 }
 
-export async function runMatching(projectId: string): Promise<MatchingSummary> {
-  const { userId, supabase } = await requireProjectOwner(projectId);
+// 제출물 라벨: 파일명 → 제출물키 → id 앞 8자.
+function labelForSub(sub: {
+  source_filename: string | null;
+  submission_key: string | null;
+  id: string;
+}): string {
+  return sub.source_filename ?? sub.submission_key ?? sub.id.slice(0, 8);
+}
+
+// 식별값 출처를 사람이 읽을 말로.
+function sourceLabel(source: IdentitySource | null): string {
+  if (source === "column") return "열";
+  if (source === "filename") return "파일명";
+  if (source === "llm") return "LLM 추정";
+  return "미상";
+}
+
+// 확인 큐로 보낸 사유를 사람이 읽을 말로 (classifyMatch의 PendingReason).
+function pendingLabel(reason: PendingReason, candidateCount: number): string {
+  switch (reason) {
+    case "name":
+      return candidateCount >= 2 ? `동명이인 ${candidateCount}명` : "명단 미일치";
+    case "number_conflict":
+      return "학번 오타 의심";
+    case "number_unknown":
+      return "학번 명단 미등록";
+    case "none":
+      return "식별 불가";
+  }
+}
+
+// classifyMatch → DB 반영. 자동 귀속(신규 학생 생성 포함)·큐행을 한 건 처리하고,
+// 사람이 읽을 결과 문구를 돌려준다. roster는 신규 학생 생성 시 제자리 갱신된다
+// (같은 실행 안에서 뒤따르는 건이 방금 만든 학생을 다시 만들지 않도록).
+async function applyClassification(
+  supabase: Client,
+  projectId: string,
+  roster: StudentRef[],
+  sub: PendingSub,
+  identity: Identity,
+): Promise<{ auto: boolean; resultText: string }> {
+  const { no, name, source } = identity;
+
+  const byNumber = no ? (roster.find((s) => s.student_number === no) ?? null) : null;
+  const byName = name ? roster.filter((s) => s.name === name) : [];
+  const outcome = classifyMatch({
+    rawStudentNo: no,
+    rawStudentName: name,
+    byNumber,
+    byName,
+    identitySource: source,
+  });
+
+  // 파일명·LLM에서 얻은 식별값은 화면에 근거로 보여야 하므로 함께 저장한다.
+  const derivedPatch =
+    source === "filename" || source === "llm"
+      ? { raw_student_no: no, raw_student_name: name }
+      : {};
+
+  if (outcome.action === "auto_existing") {
+    await supabase
+      .from("submissions")
+      .update({
+        ...derivedPatch,
+        student_id: outcome.studentId,
+        match_status: "auto_matched",
+        match_method: outcome.method,
+        identity_source: source,
+      })
+      .eq("id", sub.id);
+    const who = roster.find((s) => s.id === outcome.studentId)?.name ?? "학생";
+    const how = outcome.method === "auto_number" ? "학번 자동" : "이름 자동";
+    return { auto: true, resultText: `${who} (${sourceLabel(source)}·${how})` };
+  }
+
+  if (outcome.action === "auto_new_number") {
+    if (!no) {
+      // classify가 보장하지만 방어적으로 — 큐로 보낸다.
+      await supabase
+        .from("submissions")
+        .update({ match_status: "pending_confirm", identity_source: source })
+        .eq("id", sub.id);
+      return { auto: false, resultText: "확인 큐(식별 불가)" };
+    }
+    let student = roster.find((s) => s.student_number === no) ?? null;
+    if (!student) {
+      const { data: created, error } = await supabase
+        .from("students")
+        .insert({ project_id: projectId, student_number: no, name: name || `학번 ${no}` })
+        .select("id, student_number, name")
+        .single();
+      if (error) {
+        // 동시 실행 등으로 이미 생성됐을 수 있음 → 재조회
+        const { data: again } = await supabase
+          .from("students")
+          .select("id, student_number, name")
+          .eq("project_id", projectId)
+          .eq("student_number", no)
+          .maybeSingle();
+        if (!again) throw new Error(error.message);
+        student = again;
+      } else {
+        student = created;
+        roster.push(created);
+      }
+    }
+    await supabase
+      .from("submissions")
+      .update({
+        student_id: student.id,
+        match_status: "auto_matched",
+        match_method: "auto_new_number",
+        identity_source: source,
+      })
+      .eq("id", sub.id);
+    return { auto: true, resultText: `${student.name} (신규 학생 자동 생성)` };
+  }
+
+  // pending — 확인 대기 큐.
+  await supabase
+    .from("submissions")
+    .update({
+      ...derivedPatch,
+      match_status: "pending_confirm",
+      match_candidates: outcome.candidates,
+      identity_source: source,
+    })
+    .eq("id", sub.id);
+  return {
+    auto: false,
+    resultText: `확인 큐(${pendingLabel(outcome.reason, outcome.candidates.length)})`,
+  };
+}
+
+// ── 매칭 실행 — 클라이언트 구동 1건 단위(prepare → matchOneByLlm × N → finalize) ──
+// 전건을 한 서버 액션에서 돌리며 LLM 상한(20건)을 두던 이전 구조는 진행 표시·중단이
+// 불가했다. 결정적(열·파일명) 처리는 prepare에서 한 번에 끝내고, LLM 추정이 필요한
+// 건만 실행 터미널(useSequentialRun)이 1건씩 호출한다 → 상한 소멸.
+
+// 결정적으로 처리 가능한 건(열·파일명 식별값)을 즉시 반영하고, LLM 추정이 필요한
+// 건 목록을 돌려준다. revalidatePath는 finalize에서만.
+export async function prepareMatching(projectId: string): Promise<{
+  prelude: { level: "ok" | "info" | "system"; text: string }[];
+  llmTargets: { id: string; label: string }[];
+}> {
+  const { supabase } = await requireProjectOwner(projectId);
 
   const { data: students } = await supabase
     .from("students")
@@ -147,25 +260,19 @@ export async function runMatching(projectId: string): Promise<MatchingSummary> {
 
   const { data: subsData } = await supabase
     .from("submissions")
-    .select("id, raw_student_no, raw_student_name, source_type, source_filename, identity_source")
+    .select(
+      "id, raw_student_no, raw_student_name, source_type, source_filename, submission_key, identity_source",
+    )
     .eq("project_id", projectId)
     .eq("match_status", "unmatched");
   const subs: PendingSub[] = subsData ?? [];
 
-  const summary: MatchingSummary = {
-    autoNumber: 0,
-    autoName: 0,
-    newStudents: 0,
-    pending: 0,
-    fromFilename: 0,
-    fromLlm: 0,
-    llmRemaining: 0,
-  };
+  const prelude: { level: "ok" | "info" | "system"; text: string }[] = [];
+  const llmTargets: { id: string; label: string }[] = [];
 
-  // 1단계 — 결정적 식별값 확보 (열 → 파일명×명단).
+  // 1단계 — 결정적 식별값 확보 (열 → 파일명×명단, **원본 명단** 기준).
+  // 파일명 대조를 먼저 전부 끝낸 뒤 반영하므로, 반영 중 만들어진 학생이 대조에 끼어들지 않는다.
   const identities = new Map<string, Identity>();
-  const needsLlm: PendingSub[] = [];
-
   for (const sub of subs) {
     const no = sub.raw_student_no?.trim() || null;
     const name = sub.raw_student_name?.trim() || null;
@@ -185,121 +292,121 @@ export async function runMatching(projectId: string): Promise<MatchingSummary> {
         name: derived.studentName,
         source: "filename",
       });
-      summary.fromFilename += 1;
       continue;
     }
 
-    needsLlm.push(sub);
+    // 결정적으로 못 찾음 → LLM 추정 대상(명단이 있을 때만 — 대조할 명단이 없으면 무의미).
+    if (roster.length > 0) llmTargets.push({ id: sub.id, label: labelForSub(sub) });
   }
 
-  // 2단계 — 남은 건은 LLM으로 추출 (상한·동시성 제한). 명단이 없으면 건너뛴다.
-  const llmTargets = roster.length > 0 ? needsLlm.slice(0, LLM_BUDGET_PER_RUN) : [];
-  summary.llmRemaining = needsLlm.length - llmTargets.length;
-
-  if (llmTargets.length > 0) {
-    const routing = await loadRouting(supabase, projectId);
-    const found = await mapPool(llmTargets, LLM_CONCURRENCY, (sub) =>
-      extractIdentityByLLM(supabase, projectId, userId, routing, sub.id, roster).catch(
-        () => null, // 한 건의 LLM 실패가 전체 매칭을 막지 않는다 — 그 건은 확인 큐로 간다.
-      ),
-    );
-    llmTargets.forEach((sub, i) => {
-      const student = found[i];
-      if (!student) return;
-      identities.set(sub.id, {
-        no: student.student_number,
-        name: student.name,
-        source: "llm",
-      });
-      summary.fromLlm += 1;
-    });
-  }
-
-  // 3단계 — 분류 후 반영.
+  // 2단계 — 결정적 식별값을 가진 건만 분류·반영. LLM 대상은 matchOneByLlm이 나중에.
+  let auto = 0;
+  let pending = 0;
   for (const sub of subs) {
-    const identity = identities.get(sub.id) ?? { no: null, name: null, source: null };
-    const { no, name, source } = identity;
+    const identity = identities.get(sub.id);
+    if (!identity) continue;
+    const { auto: isAuto, resultText } = await applyClassification(
+      supabase,
+      projectId,
+      roster,
+      sub,
+      identity,
+    );
+    prelude.push({ level: isAuto ? "ok" : "info", text: `${labelForSub(sub)} → ${resultText}` });
+    if (isAuto) auto += 1;
+    else pending += 1;
+  }
 
-    const byNumber = no ? (roster.find((s) => s.student_number === no) ?? null) : null;
-    const byName = name ? roster.filter((s) => s.name === name) : [];
-    const outcome = classifyMatch({
-      rawStudentNo: no,
-      rawStudentName: name,
-      byNumber,
-      byName,
-      identitySource: source,
+  // 요약·안내.
+  if (subs.length === 0) {
+    prelude.push({ level: "system", text: "매칭할 미매칭 제출물이 없습니다." });
+  } else {
+    prelude.push({
+      level: "info",
+      text: `결정적 처리 ${auto + pending}건 (자동 ${auto} · 확인 큐 ${pending}) · LLM 추정 대상 ${llmTargets.length}건`,
     });
-
-    // 파일명·LLM에서 얻은 식별값은 화면에 근거로 보여야 하므로 함께 저장한다.
-    const derivedPatch =
-      source === "filename" || source === "llm"
-        ? { raw_student_no: no, raw_student_name: name }
-        : {};
-
-    if (outcome.action === "auto_existing") {
-      await supabase
-        .from("submissions")
-        .update({
-          ...derivedPatch,
-          student_id: outcome.studentId,
-          match_status: "auto_matched",
-          match_method: outcome.method,
-          identity_source: source,
-        })
-        .eq("id", sub.id);
-      if (outcome.method === "auto_number") summary.autoNumber += 1;
-      else summary.autoName += 1;
-    } else if (outcome.action === "auto_new_number") {
-      if (!no) continue; // classify가 보장하지만 방어적으로
-      let student = roster.find((s) => s.student_number === no) ?? null;
-      if (!student) {
-        const { data: created, error } = await supabase
-          .from("students")
-          .insert({ project_id: projectId, student_number: no, name: name || `학번 ${no}` })
-          .select("id, student_number, name")
-          .single();
-        if (error) {
-          // 동시 실행 등으로 이미 생성됐을 수 있음 → 재조회
-          const { data: again } = await supabase
-            .from("students")
-            .select("id, student_number, name")
-            .eq("project_id", projectId)
-            .eq("student_number", no)
-            .maybeSingle();
-          if (!again) throw new Error(error.message);
-          student = again;
-        } else {
-          student = created;
-          roster.push(created);
-          summary.newStudents += 1;
-        }
-      }
-      await supabase
-        .from("submissions")
-        .update({
-          student_id: student.id,
-          match_status: "auto_matched",
-          match_method: "auto_new_number",
-          identity_source: source,
-        })
-        .eq("id", sub.id);
-      summary.autoNumber += 1;
-    } else {
-      await supabase
-        .from("submissions")
-        .update({
-          ...derivedPatch,
-          match_status: "pending_confirm",
-          match_candidates: outcome.candidates,
-          identity_source: source,
-        })
-        .eq("id", sub.id);
-      summary.pending += 1;
+    if (roster.length === 0) {
+      prelude.push({
+        level: "system",
+        text: "학생 명단이 비어 있어 파일명·LLM 매칭을 건너뜁니다. 학생 명단을 먼저 등록하세요.",
+      });
     }
   }
 
+  return { prelude, llmTargets };
+}
+
+// 제출물 1건을 LLM 추정으로 처리(터미널이 반복 호출). 자동 귀속·큐행 모두 ok:true,
+// 진짜 오류(LLM·DB)만 ok:false — 서킷 브레이커는 이것만 센다.
+// 클라이언트 입력은 id뿐 — 명단·라우팅은 서버가 DB에서 재조립한다(INV-2).
+export async function matchOneByLlm(
+  projectId: string,
+  submissionId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  const { data: students } = await supabase
+    .from("students")
+    .select("id, student_number, name")
+    .eq("project_id", projectId);
+  const roster: StudentRef[] = students ?? [];
+
+  // 소속·상태 재확인(다른 프로젝트·이미 처리된 건 차단, 동시 실행 방어).
+  const { data: subData } = await supabase
+    .from("submissions")
+    .select(
+      "id, raw_student_no, raw_student_name, source_type, source_filename, submission_key, identity_source, match_status",
+    )
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (!subData) return { ok: false, message: "제출물을 찾을 수 없습니다." };
+  if (subData.match_status !== "unmatched") {
+    return { ok: true, message: "→ 이미 처리됨" };
+  }
+  const sub: PendingSub = subData;
+
+  // LLM 추출 — 명단의 학생 한 명 지목(환각 응답은 버림).
+  let student: StudentRef | null;
+  try {
+    const routing = await loadRouting(supabase, projectId);
+    student = await extractIdentityByLLM(
+      supabase,
+      projectId,
+      userId,
+      routing,
+      submissionId,
+      roster,
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "LLM 호출 실패";
+    return { ok: false, message: msg.slice(0, 300) };
+  }
+
+  const identity: Identity = student
+    ? { no: student.student_number, name: student.name, source: "llm" }
+    : { no: null, name: null, source: null };
+
+  try {
+    const { resultText } = await applyClassification(
+      supabase,
+      projectId,
+      roster,
+      sub,
+      identity,
+    );
+    return { ok: true, message: `→ ${resultText}` };
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "DB 반영 실패";
+    return { ok: false, message: msg.slice(0, 300) };
+  }
+}
+
+// 실행 종료 후 1회: 목록 재조회를 위해 revalidate만. 매칭은 재계산·감사 로그 없음(기존과 동일).
+export async function finalizeMatching(projectId: string): Promise<null> {
+  await requireProjectOwner(projectId);
   revalidatePath(`/projects/${projectId}/submissions`);
-  return summary;
+  return null;
 }
 
 // ── 재귀속 (SPEC 5.4) — 자동 귀속의 오류를 교사가 사후에 바로잡는 경로 ──

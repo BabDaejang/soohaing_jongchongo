@@ -21,10 +21,17 @@ export default async function RecordsPage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, char_limit, count_method")
+    .select("id, name, char_limit, count_method, model_routing")
     .eq("id", id)
     .maybeSingle();
   if (!project) notFound();
+
+  // 생성·검증 모델 배지(요구 ②): 라우팅 대상 + 프로바이더명. 학생 1명=LLM 1회(INV-1)라 터미널은 비적용.
+  const { data: providers } = await supabase.from("providers").select("id, name");
+  const providerNameOf = (providerId: string | undefined) =>
+    providers?.find((p) => p.id === providerId)?.name ?? "알 수 없음";
+  const genTarget = project.model_routing.generate;
+  const verTarget = project.model_routing.verify;
 
   const [studentsRes, recordsRes, subsRes] = await Promise.all([
     supabase
@@ -106,6 +113,10 @@ export default async function RecordsPage({
         <p className="mt-1 text-sm text-zinc-500">
           학생 한 명씩 격리 생성합니다. 반영된 제출물과 교사 관찰 메모에 근거한 내용만
           서술하며, 생성 직후 검증 패스가 근거 없는 문장을 표시합니다.
+        </p>
+        <p className="mt-2 text-xs text-zinc-400">
+          생성 모델: {providerNameOf(genTarget?.provider_id)} / {genTarget?.model ?? "미설정"} ·
+          검증 모델: {providerNameOf(verTarget?.provider_id)} / {verTarget?.model ?? "미설정"}
         </p>
       </header>
 
