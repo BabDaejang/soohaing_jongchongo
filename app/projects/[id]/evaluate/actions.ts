@@ -190,25 +190,17 @@ async function recomputeAndSave(
   return rows.length;
 }
 
-// ── 평가 실행(교사 버튼) — 증분 채점 후 재계산 ─────────────────────────
-export type EvalSummary = {
-  scored: number; // 새로 채점
-  skipped: number; // 내용 불변 → 기존 평가 보존(증분)
-  failed: number; // 호출·삽입 실패
-  ranked: number; // 순위 산출된 학생 수
-};
+// ── 평가 실행 — 클라이언트 구동 1건 단위(prepare → evaluateOne × N → finalize) ──
+// 전건을 한 서버 액션에서 돌리던 이전 구조는 진행 표시·중단이 불가하고 성공 시
+// 타임아웃이 확정이라, 실행 터미널(useSequentialRun)이 건별로 호출하는 구조로 나눴다.
+export type EvalTarget = { id: string; label: string }; // label = "학번 이름"(+ " · 파일명")
 
-export async function runEvaluation(projectId: string): Promise<EvalSummary> {
-  const { userId, supabase } = await requireProjectOwner(projectId);
+// 채점 대상 목록·라벨과 증분 보존 건수를 조립한다(LLM 호출 없음).
+export async function prepareEvaluation(
+  projectId: string,
+): Promise<{ targets: EvalTarget[]; skipped: number }> {
+  const { supabase } = await requireProjectOwner(projectId);
   const admin = createAdminClient();
-
-  const { data: project } = await supabase
-    .from("projects")
-    .select("model_routing")
-    .eq("id", projectId)
-    .single();
-  if (!project) throw new Error("프로젝트를 찾을 수 없습니다.");
-  const routing: ModelRouting = project.model_routing;
 
   const { data: rubric } = await supabase
     .from("rubrics")
@@ -220,78 +212,170 @@ export async function runEvaluation(projectId: string): Promise<EvalSummary> {
     throw new Error("루브릭 기준이 없습니다. 먼저 루브릭을 설정하세요.");
   }
 
-  const { data: targets } = await supabase
+  const { data: subs } = await supabase
     .from("submissions")
-    .select("id, content_text, content_hash")
+    .select("id, student_id, source_filename, content_hash")
     .eq("project_id", projectId)
     .eq("include_in_eval", true)
     .not("student_id", "is", null)
     .in("match_status", MATCHED_STATUSES);
+  const rows = subs ?? [];
 
-  // 증분 판정: 현재 평가의 content_hash 스냅샷.
-  const targetIds = (targets ?? []).map((t) => t.id);
+  // label용 학생 정보(학번·이름)는 students 1회 조회로 조인.
+  const { data: students } = await supabase
+    .from("students")
+    .select("id, student_number, name")
+    .eq("project_id", projectId);
+  const studentById = new Map((students ?? []).map((s) => [s.id, s]));
+
+  // 증분: 현재 평가(is_current)의 content_hash와 같으면 재채점 대상에서 제외(보존).
+  const ids = rows.map((r) => r.id);
   const currentBySub = new Map<string, string>();
-  if (targetIds.length > 0) {
+  if (ids.length > 0) {
     const { data: existing } = await admin
       .from("evaluations")
       .select("submission_id, content_hash")
-      .in("submission_id", targetIds)
+      .in("submission_id", ids)
       .eq("is_current", true);
     for (const e of existing ?? []) currentBySub.set(e.submission_id, e.content_hash);
   }
 
-  const summary: EvalSummary = { scored: 0, skipped: 0, failed: 0, ranked: 0 };
-
-  for (const sub of targets ?? []) {
-    const existingHash = currentBySub.get(sub.id);
-    if (existingHash !== undefined && existingHash === sub.content_hash) {
-      summary.skipped += 1; // 증분: 내용 불변 → 재채점 안 함(기존 평가 보존)
+  const targets: EvalTarget[] = [];
+  let skipped = 0;
+  for (const r of rows) {
+    const existingHash = currentBySub.get(r.id);
+    if (existingHash !== undefined && existingHash === r.content_hash) {
+      skipped += 1; // 증분: 내용 불변 → 재채점 안 함(기존 평가 보존)
       continue;
     }
-    try {
-      const res = await callLLM({
-        userId,
-        purpose: "평가",
-        modelRouting: routing,
-        temperature: 0, // 결정성(수용 2)
-        messages: [
-          {
-            role: "user",
-            content: buildEvalPrompt(criteria, sub.content_text.slice(0, 12000)),
-          },
-        ],
-      });
-      const { scores, total } = parseEvalScores(res.text, criteria);
-
-      // partial unique(submission_id where is_current) 충돌 방지: 이전 현재 평가를 먼저 내린다.
-      if (existingHash !== undefined) {
-        await admin
-          .from("evaluations")
-          .update({ is_current: false })
-          .eq("submission_id", sub.id)
-          .eq("is_current", true);
-      }
-      const { error: insErr } = await admin.from("evaluations").insert({
-        submission_id: sub.id,
-        project_id: projectId,
-        scores,
-        total_score: total,
-        content_hash: sub.content_hash,
-        raw_llm_output: res.text,
-        model: res.model,
-        is_current: true,
-      });
-      if (insErr) {
-        summary.failed += 1;
-        continue;
-      }
-      summary.scored += 1;
-    } catch {
-      summary.failed += 1;
-    }
+    const st = r.student_id ? studentById.get(r.student_id) : undefined;
+    const who = st ? `${st.student_number ?? "?"} ${st.name}`.trim() : "(미상)";
+    const label = r.source_filename ? `${who} · ${r.source_filename}` : who;
+    targets.push({ id: r.id, label });
   }
 
-  summary.ranked = await recomputeAndSave(projectId, supabase, admin);
+  return { targets, skipped };
+}
+
+// 제출물 1건 채점(터미널이 반복 호출). 에러는 버리지 않고 message로 돌려준다.
+// 클라이언트 입력은 id뿐 — 루브릭·라우팅은 서버가 DB에서 재조립한다(INV-2).
+export async function evaluateOne(
+  projectId: string,
+  submissionId: string,
+): Promise<{ ok: boolean; message: string }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const { data: rubric } = await supabase
+    .from("rubrics")
+    .select("criteria")
+    .eq("project_id", projectId)
+    .maybeSingle();
+  const criteria = (rubric?.criteria ?? []) as RubricCriterion[];
+  if (criteria.length === 0) {
+    return { ok: false, message: "루브릭 기준이 없습니다." };
+  }
+
+  const { data: project } = await supabase
+    .from("projects")
+    .select("model_routing")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (!project) return { ok: false, message: "프로젝트를 찾을 수 없습니다." };
+  const routing: ModelRouting = project.model_routing;
+
+  // 제출물 소속·자격 재확인(다른 프로젝트·미매칭·미반영 제출물 차단).
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select(
+      "id, content_text, content_hash, include_in_eval, student_id, match_status",
+    )
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (
+    !sub ||
+    !sub.include_in_eval ||
+    !sub.student_id ||
+    !MATCHED_STATUSES.includes(sub.match_status)
+  ) {
+    return { ok: false, message: "채점 대상이 아닌 제출물입니다." };
+  }
+
+  // 동시 탭 방어: 채점 직전 현재 평가 해시를 재확인 — 같으면 이미 채점됨(증분).
+  const { data: current } = await admin
+    .from("evaluations")
+    .select("content_hash")
+    .eq("submission_id", submissionId)
+    .eq("is_current", true)
+    .maybeSingle();
+  if (current && current.content_hash === sub.content_hash) {
+    return { ok: true, message: "이미 채점됨(증분)" };
+  }
+
+  // temperature 0으로 결정성 요청 — gpt-5 계열은 배치 1 어댑터가 temperature를 자동 생략한다.
+  let text: string;
+  let model: string;
+  try {
+    const res = await callLLM({
+      userId,
+      purpose: "평가",
+      modelRouting: routing,
+      temperature: 0,
+      messages: [
+        {
+          role: "user",
+          content: buildEvalPrompt(criteria, sub.content_text.slice(0, 12000)),
+        },
+      ],
+    });
+    text = res.text;
+    model = res.model;
+  } catch (e) {
+    // 더 이상 버리지 않는다 — 원인을 그대로 돌려 터미널·서킷 브레이커가 표시하게 한다.
+    const msg = e instanceof Error ? e.message : "LLM 호출 실패";
+    return { ok: false, message: msg.slice(0, 300) };
+  }
+
+  const { scores, total } = parseEvalScores(text, criteria);
+
+  // partial unique(submission_id where is_current) 충돌 방지: 이전 현재 평가를 먼저 내린다.
+  if (current) {
+    await admin
+      .from("evaluations")
+      .update({ is_current: false })
+      .eq("submission_id", submissionId)
+      .eq("is_current", true);
+  }
+  const { error: insErr } = await admin.from("evaluations").insert({
+    submission_id: submissionId,
+    project_id: projectId,
+    scores,
+    total_score: total,
+    content_hash: sub.content_hash,
+    raw_llm_output: text,
+    model,
+    is_current: true,
+  });
+  if (insErr) {
+    return { ok: false, message: `평가 저장 실패: ${insErr.message}`.slice(0, 300) };
+  }
+
+  return { ok: true, message: `${total}점` };
+}
+
+// 실행 종료 후 1회: 합성·순위·등급 재계산 → 감사 로그 → revalidate.
+// revalidatePath는 여기서만 — 건별로 하면 매 건 RSC 재조회가 낭비다.
+export async function finalizeEvaluation(
+  projectId: string,
+  counts: { scored: number; failed: number; skipped: number },
+  aborted: boolean,
+  sampleFailure?: string, // 클라이언트가 수집한 대표 실패 사유
+): Promise<number> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const ranked = await recomputeAndSave(projectId, supabase, admin);
 
   await writeAuditLog({
     actorId: userId,
@@ -299,14 +383,16 @@ export async function runEvaluation(projectId: string): Promise<EvalSummary> {
     entity: "projects",
     entityId: projectId,
     detail: {
-      scored: summary.scored,
-      skipped: summary.skipped,
-      failed: summary.failed,
+      scored: counts.scored,
+      failed: counts.failed,
+      skipped: counts.skipped,
+      aborted,
+      ...(sampleFailure ? { sample_failure: sampleFailure.slice(0, 300) } : {}),
     },
   });
 
   revalidatePath(`/projects/${projectId}/evaluate`);
-  return summary;
+  return ranked;
 }
 
 // ── 재계산만(재채점 없이 합성·순위·등급) ────────────────────────────────

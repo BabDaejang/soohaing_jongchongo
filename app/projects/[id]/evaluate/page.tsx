@@ -4,6 +4,9 @@ import { createClient } from "@/lib/supabase/server";
 import { RunPanel } from "@/components/projects/evaluate/run-panel";
 import { ResultsTable, type ScoreRow } from "@/components/projects/evaluate/results-table";
 
+// 채점은 클라이언트가 1건 단위로 호출하지만, 재계산(finalize)·확인 조회에 여유를 둔다.
+export const maxDuration = 120;
+
 // Phase 2 상대평가 (SPEC 6절). 채점 → 합성 → 순위 → 등급 파생. 등급 직접 수정 없음(INV-6).
 export default async function EvaluatePage({
   params,
@@ -15,10 +18,17 @@ export default async function EvaluatePage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, grading_scheme, tie_break, needs_recalc")
+    .select("id, name, grading_scheme, tie_break, needs_recalc, model_routing")
     .eq("id", id)
     .maybeSingle();
   if (!project) notFound();
+
+  // 평가 모델 배지(요구 ②): 라우팅의 evaluate 대상 + 프로바이더명.
+  const evalTarget = project.model_routing.evaluate;
+  const { data: providers } = await supabase.from("providers").select("id, name");
+  const providerName =
+    providers?.find((p) => p.id === evalTarget?.provider_id)?.name ?? "알 수 없음";
+  const evalModel = evalTarget?.model ?? "미설정";
 
   const [studentsRes, scoresRes, matchedRes, evalRes] = await Promise.all([
     supabase
@@ -87,6 +97,8 @@ export default async function EvaluatePage({
           needsRecalc={project.needs_recalc}
           matchedIncluded={matchedRes.count ?? 0}
           scoredSubmissions={evalRes.count ?? 0}
+          providerName={providerName}
+          model={evalModel}
         />
       </section>
 
