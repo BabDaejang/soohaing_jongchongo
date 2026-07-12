@@ -214,8 +214,9 @@ export type StudentScore = {
   id: string;
   project_id: string;
   student_id: string;
-  composite_score: number;
-  effective_score: number; // coalesce(students.score_override, composite_score)
+  composite_score: number; // 원점수(루브릭 합성)
+  display_score: number | null; // 999점 표시 점수 (0012, sticky). 미확정·override만 있는 학생은 null
+  effective_score: number; // coalesce(students.score_override, display_score) — 순위·등급 산출
   rank: number;
   grade: number; // 파생 등급 스냅샷 (토글 즉시 반영은 lib/grading 파생으로)
   calculated_at: string;
@@ -477,6 +478,7 @@ export type Database = {
           project_id: string;
           student_id: string;
           composite_score: number;
+          display_score: number | null;
           effective_score: number;
           rank: number;
           grade: number;
@@ -486,6 +488,7 @@ export type Database = {
           Pick<
             StudentScore,
             | "composite_score"
+            | "display_score"
             | "effective_score"
             | "rank"
             | "grade"

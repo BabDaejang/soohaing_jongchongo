@@ -18,8 +18,9 @@ export type ScoreRow = {
   studentId: string;
   name: string;
   studentNumber: string | null;
-  composite: number;
-  effective: number;
+  composite: number; // 원점수(루브릭 합성)
+  displayScore: number | null; // 999점 표시 점수(override 미설정 시 반영 점수)
+  effective: number; // override ?? display — 순위·등급 파생 기준
   override: number | null;
   overrideReason: string | null;
 };
@@ -135,8 +136,8 @@ export function ResultsTable({
             <tr>
               <th className="px-3 py-2 font-medium">석차</th>
               <th className="px-3 py-2 font-medium">학생</th>
-              <th className="px-3 py-2 font-medium">합성 점수</th>
-              <th className="px-3 py-2 font-medium">반영 점수</th>
+              <th className="px-3 py-2 font-medium">원점수</th>
+              <th className="px-3 py-2 font-medium">반영 점수(999)</th>
               <th className="px-3 py-2 font-medium">등급</th>
               <th className="px-3 py-2 font-medium">교사 보정</th>
             </tr>
@@ -171,7 +172,8 @@ function Row({
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(String(row.override ?? row.composite));
+  // 보정 기본값은 현재 반영 점수(override ?? 표시 점수, 999 스케일).
+  const [value, setValue] = useState(String(row.override ?? row.displayScore ?? ""));
   const [reason, setReason] = useState(row.overrideReason ?? "");
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
@@ -179,8 +181,8 @@ function Row({
   function save() {
     setError(null);
     const num = Number(value);
-    if (!Number.isFinite(num)) {
-      setError("숫자를 입력하세요.");
+    if (!Number.isInteger(num) || num < 0 || num > 999) {
+      setError("보정 점수는 0~999 정수입니다.");
       return;
     }
     if (!reason.trim()) {
@@ -259,10 +261,12 @@ function Row({
           <div className="flex w-56 flex-col gap-1.5">
             <input
               type="number"
-              step="any"
+              step="1"
+              min="0"
+              max="999"
               value={value}
               onChange={(e) => setValue(e.target.value)}
-              placeholder="반영 점수"
+              placeholder="반영 점수(0~999)"
               className="rounded border border-zinc-300 px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
             />
             <textarea

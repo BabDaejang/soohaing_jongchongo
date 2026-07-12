@@ -13,6 +13,7 @@ import {
   type CriterionScore,
 } from "@/lib/scoring";
 import { computeStandings } from "@/lib/grading";
+import { assignDisplayScores, initialConfirmCount } from "@/lib/scores/display";
 import type {
   Database,
   EvaluationCriterionScore,
@@ -90,12 +91,19 @@ function parseEvalScores(
   return { scores, total };
 }
 
-// ── 합성·순위·등급 재계산 후 student_scores 저장 (INV-6: service role 배치만 write) ──
+// ── 합성·표시 점수·순위·등급 재계산 후 student_scores 저장 (INV-6: service role 배치만 write) ──
+// 999점 표시 점수(display_score)를 끼워 넣는다: 초기 확정 인원 미달이면 확정하지 않고(행 미생성),
+// 충족하면 원점수 순위로 스프레드하되 이전 배정은 유지(sticky). effective = override ?? display.
+export type RecomputeResult = {
+  ranked: number; // 확정 시 student_scores에 기록된 학생 수(미확정이면 0)
+  pendingConfirm: { scored: number; required: number } | null; // 미확정 국면 정보
+};
+
 async function recomputeAndSave(
   projectId: string,
   supabase: Client,
   admin: Admin,
-): Promise<number> {
+): Promise<RecomputeResult> {
   const { data: project } = await supabase
     .from("projects")
     .select("score_aggregation, grading_scheme, tie_break")
@@ -151,28 +159,82 @@ async function recomputeAndSave(
   }
 
   // 랭킹 대상: 평가가 있거나 override가 설정된 학생.
-  type Row = { studentId: string; composite: number; effective: number };
+  type Row = {
+    studentId: string;
+    composite: number;
+    override: number | null;
+    hasEval: boolean;
+  };
   const rows: Row[] = [];
   for (const st of students ?? []) {
     const subScores = perStudent.get(st.id) ?? [];
     const override = st.score_override;
-    if (subScores.length === 0 && override === null) continue;
+    const hasEval = subScores.length > 0;
+    if (!hasEval && override === null) continue;
     const composite = aggregateComposite(subScores, aggregation);
-    const effective = override ?? composite;
-    rows.push({ studentId: st.id, composite, effective });
+    rows.push({ studentId: st.id, composite, override, hasEval });
   }
 
+  // 이전 표시 점수 배정(sticky) — 삭제 전에 조회. null 값(override만 있던 행)은 제외.
+  const { data: prior } = await admin
+    .from("student_scores")
+    .select("student_id, display_score")
+    .eq("project_id", projectId);
+  const existing = new Map<string, number>();
+  for (const p of prior ?? []) {
+    if (p.display_score !== null) existing.set(p.student_id, p.display_score);
+  }
+
+  // 채점 대상 총수 = 제출물이 귀속된 학생 수(미채점 포함). override만 있는 학생은 제외.
+  const totalTargets = new Set(subToStudent.values()).size;
+
+  // 원점수(composite) 내림차순, 동률은 studentId 사전순(결정성).
+  const rawRanked = rows
+    .filter((r) => r.hasEval)
+    .sort(
+      (a, b) =>
+        b.composite - a.composite || (a.studentId < b.studentId ? -1 : 1),
+    )
+    .map((r) => ({ studentId: r.studentId, raw: r.composite }));
+
+  const { displays, confirmed } = assignDisplayScores({
+    rawRanked,
+    existing,
+    totalTargets,
+  });
+
+  // 미확정 국면: 표시 점수를 확정하지 않는다 — 기존 스냅샷을 지우기만 하고 삽입하지 않는다.
+  if (!confirmed) {
+    await admin.from("student_scores").delete().eq("project_id", projectId);
+    await admin.from("projects").update({ needs_recalc: false }).eq("id", projectId);
+    return {
+      ranked: 0,
+      pendingConfirm: {
+        scored: rawRanked.length,
+        required: initialConfirmCount(totalTargets),
+      },
+    };
+  }
+
+  // 확정: effective = override ?? display. override만 있고 평가 없는 학생은 display=null.
+  const withDisplay = rows.map((r) => {
+    const display = displays.get(r.studentId) ?? null;
+    const effective = r.override ?? display ?? 0; // 둘 다 null은 발생하지 않음(위 필터)
+    return { ...r, display, effective };
+  });
+
   const standings = computeStandings(
-    rows.map((r) => r.effective),
+    withDisplay.map((r) => r.effective),
     scheme,
     tieBreak,
   );
 
   const nowIso = new Date().toISOString();
-  const inserts = rows.map((r, i) => ({
+  const inserts = withDisplay.map((r, i) => ({
     project_id: projectId,
     student_id: r.studentId,
     composite_score: r.composite,
+    display_score: r.display,
     effective_score: r.effective,
     rank: standings[i].rank,
     grade: standings[i].grade,
@@ -187,7 +249,7 @@ async function recomputeAndSave(
   }
 
   await admin.from("projects").update({ needs_recalc: false }).eq("id", projectId);
-  return rows.length;
+  return { ranked: withDisplay.length, pendingConfirm: null };
 }
 
 // ── 평가 실행 — 클라이언트 구동 1건 단위(prepare → evaluateOne × N → finalize) ──
@@ -361,7 +423,7 @@ export async function evaluateOne(
     return { ok: false, message: `평가 저장 실패: ${insErr.message}`.slice(0, 300) };
   }
 
-  return { ok: true, message: `${total}점` };
+  return { ok: true, message: `원점수 ${total}점` };
 }
 
 // 실행 종료 후 1회: 합성·순위·등급 재계산 → 감사 로그 → revalidate.
@@ -371,11 +433,11 @@ export async function finalizeEvaluation(
   counts: { scored: number; failed: number; skipped: number },
   aborted: boolean,
   sampleFailure?: string, // 클라이언트가 수집한 대표 실패 사유
-): Promise<number> {
+): Promise<RecomputeResult> {
   const { userId, supabase } = await requireProjectOwner(projectId);
   const admin = createAdminClient();
 
-  const ranked = await recomputeAndSave(projectId, supabase, admin);
+  const result = await recomputeAndSave(projectId, supabase, admin);
 
   await writeAuditLog({
     actorId: userId,
@@ -392,16 +454,16 @@ export async function finalizeEvaluation(
   });
 
   revalidatePath(`/projects/${projectId}/evaluate`);
-  return ranked;
+  return result;
 }
 
-// ── 재계산만(재채점 없이 합성·순위·등급) ────────────────────────────────
-export async function recalculate(projectId: string): Promise<number> {
+// ── 재계산만(재채점 없이 합성·표시 점수·순위·등급) ──────────────────────
+export async function recalculate(projectId: string): Promise<RecomputeResult> {
   const { supabase } = await requireProjectOwner(projectId);
   const admin = createAdminClient();
-  const ranked = await recomputeAndSave(projectId, supabase, admin);
+  const result = await recomputeAndSave(projectId, supabase, admin);
   revalidatePath(`/projects/${projectId}/evaluate`);
-  return ranked;
+  return result;
 }
 
 // ── 교사 보정 override (사유 필수, 감사 로그, 재계산) ────────────────────
@@ -414,7 +476,10 @@ export async function setScoreOverride(
   const { userId, supabase } = await requireProjectOwner(projectId);
   const cleanReason = reason.trim();
   if (!cleanReason) throw new Error("보정 사유를 입력하세요."); // 수용 4
-  if (!Number.isFinite(value)) throw new Error("보정 점수가 올바르지 않습니다.");
+  // 표시 점수 스케일과 일치: 0~999 정수(2026-07-12 점수 체계 전환).
+  if (!Number.isInteger(value) || value < 0 || value > 999) {
+    throw new Error("보정 점수는 0~999 정수입니다.");
+  }
 
   const { error } = await supabase
     .from("students")

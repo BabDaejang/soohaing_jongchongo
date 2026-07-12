@@ -130,7 +130,7 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | student_number | text | | 학번. unique `(project_id, student_number)` (NULL 제외 partial) |
 | name | text | not null | |
 | teacher_memo | text | | 교사 개인 관찰 메모 (SPEC 7.4) — 이 학생 레코드에 귀속 (INV-2 예외 경로) |
-| score_override | numeric | | 교사 개입 점수 (SPEC 6절). NULL = 미사용. **세션 7 마이그레이션에서 추가** — Phase 2 전용 (DECISIONS 2026-07-08) |
+| score_override | numeric | | 교사 개입 점수 (SPEC 6절). NULL = 미사용. **세션 7 마이그레이션에서 추가** — Phase 2 전용 (DECISIONS 2026-07-08). **0~999 정수(2026-07-12 점수 체계 전환)** — 표시 점수 스케일과 일치, 표시 점수보다 우선. 구(루브릭 합산) 스케일 보정값은 0012에서 초기화 |
 | override_reason | text | | **score_override가 NOT NULL이면 필수** (check 제약: 둘 다 NULL이거나 둘 다 NOT NULL). **세션 7 마이그레이션에서 추가** |
 | created_at / updated_at | timestamptz | | |
 
@@ -197,14 +197,16 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | id | uuid | PK | |
 | project_id | uuid | not null, FK → projects(id) on delete cascade | |
 | student_id | uuid | not null, FK → students(id) on delete cascade, unique `(project_id, student_id)` | |
-| composite_score | numeric | not null | 합성 점수 (합/평균/가중 — 프로젝트 설정) |
-| effective_score | numeric | not null | `coalesce(students.score_override, composite_score)` 스냅샷 — 순위 산출에 사용 |
+| composite_score | numeric | not null | 합성 점수 (합/평균/가중 — 프로젝트 설정). "원점수" |
+| display_score | integer | | **999점 만점 표시 점수 (2026-07-12 도입, 0012)**. 초기 확정 인원 채점 후 원점수 순위로 800~200 등간격 스프레드, 이후 이웃 중간값 삽입, 정수 소진 시 순서 보존 전체 재배치. **재계산에도 유지(sticky)**. **미확정 국면(초기 확정 인원 미달)에는 student_scores 행 자체가 없다** — 컬럼 nullable(override만 있고 평가 없는 학생 행은 display_score NULL) |
+| effective_score | numeric | not null | `coalesce(students.score_override, display_score)` 스냅샷 — 순위·등급 산출에 사용. 표시 점수 도입 전에는 composite_score를 폴백했으나, 이제 표시 점수(999 스케일)를 쓴다 |
 | rank | integer | not null | 전체 순위 (동점 처리 반영) |
 | grade | integer | not null | 파생 등급 (누적 비율 매핑 결과) |
 | calculated_at | timestamptz | not null | 계산 배치 시각 |
 
 - **INV-6 강제**: 이 테이블은 **서버 재계산 배치만 쓴다**. RLS에서 소유자는 select만, insert/update/delete는 service role 전용. 등급을 직접 수정하는 API·UI를 만들지 않는다. grade는 저장하되 "재계산의 산출 스냅샷"이며, 등급제 토글 시 화면 즉시 반영은 저장값이 아닌 **rank + 등급 매핑표로 클라이언트 파생 표시**로 구현 (재계산 없이 토글 가능).
-- 교사 개입은 `students.score_override`(사유 필수) → 재계산 트리거 경로만.
+- 표시 점수(display_score)도 파생 산출 스냅샷이다: 등급·순위는 `effective(= override ?? display)` 내림차순에서 파생(INV-6 불변) — 999점 체계는 **표시 점수**를 바꾸는 것이지 등급 직접 입력이 아니다.
+- 교사 개입은 `students.score_override`(0~999 정수, 사유 필수) → 재계산 트리거 경로만. override는 표시 점수보다 우선한다.
 
 ## 11. records — 생기부 (버전 관리, INV-1~3)
 

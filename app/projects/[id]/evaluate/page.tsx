@@ -37,7 +37,7 @@ export default async function EvaluatePage({
       .eq("project_id", id),
     supabase
       .from("student_scores")
-      .select("student_id, composite_score, effective_score")
+      .select("student_id, composite_score, display_score, effective_score")
       .eq("project_id", id),
     supabase
       .from("submissions")
@@ -68,6 +68,7 @@ export default async function EvaluatePage({
       name: st.name,
       studentNumber: st.student_number,
       composite: Number(sc.composite_score),
+      displayScore: sc.display_score === null ? null : Number(sc.display_score),
       effective: Number(sc.effective_score),
       override: st.score_override === null ? null : Number(st.score_override),
       overrideReason: st.override_reason,

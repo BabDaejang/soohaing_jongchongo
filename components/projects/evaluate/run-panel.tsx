@@ -74,14 +74,16 @@ export function RunPanel({
       failed: number;
       aborted: boolean;
     }) => {
-      const ranked = await finalizeEvaluation(
+      const { ranked, pendingConfirm } = await finalizeEvaluation(
         projectId,
         { scored: succeeded, failed, skipped: skippedRef.current },
         aborted,
         sampleFailureRef.current ?? undefined,
       );
       router.refresh();
-      return `재계산 — ${ranked}명 순위 산출`;
+      return pendingConfirm
+        ? `채점 ${pendingConfirm.scored}/${pendingConfirm.required}명 — 표시 점수 확정 대기(최소 ${pendingConfirm.required}명 채점 후 확정)`
+        : `재계산 — ${ranked}명 순위 산출`;
     },
     [projectId, router],
   );
@@ -97,8 +99,12 @@ export function RunPanel({
     setMsg(null);
     startRecalc(async () => {
       try {
-        const ranked = await recalculate(projectId);
-        setMsg(`재계산 완료 — ${ranked}명 순위 산출`);
+        const { ranked, pendingConfirm } = await recalculate(projectId);
+        setMsg(
+          pendingConfirm
+            ? `채점 ${pendingConfirm.scored}/${pendingConfirm.required}명 — 표시 점수 확정 대기(최소 ${pendingConfirm.required}명 채점 후 확정)`
+            : `재계산 완료 — ${ranked}명 순위 산출`,
+        );
         router.refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : "재계산 실패");
@@ -153,7 +159,8 @@ export function RunPanel({
         {pendingCount > 0 && ` · 미채점 ${pendingCount}건`}. 채점은 건별로 실행되며 진행 중
         일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다. temperature를 지원하는
         모델은 0으로 고정하며(gpt-5 계열 미지원), 내용이 바뀌지 않은 제출물은 재채점하지
-        않습니다(증분).
+        않습니다(증분). 표시 점수는 초기 확정 인원(15~25명) 채점 후 999점 만점으로
+        확정됩니다.
       </p>
 
       {lines.length > 0 && (
