@@ -12,7 +12,9 @@ export type PdfTextResult = { text: string; pages: number };
 
 // pdf: 텍스트 레이어 추출(서버리스 pdfjs = unpdf, canvas 불필요).
 export async function parsePdfText(bytes: Uint8Array): Promise<PdfTextResult> {
-  const pdf = await getDocumentProxy(bytes);
+  // pdf.js(getDocumentProxy)는 전달받은 ArrayBuffer를 워커로 이전(detach)한다.
+  // 호출자가 bytes를 계속 쓸 수 있도록(스캔 PDF OCR의 base64 인코딩 등) 사본을 넘긴다.
+  const pdf = await getDocumentProxy(bytes.slice());
   const { text, totalPages } = await extractText(pdf, { mergePages: true });
   return {
     text: Array.isArray(text) ? text.join("\n\n") : text,

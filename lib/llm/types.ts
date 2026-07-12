@@ -15,6 +15,7 @@ export type LLMDocumentPart = {
   type: "document";
   mediaType: "application/pdf";
   dataBase64: string;
+  filename?: string; // OpenAI file 파트의 filename용(선택). 기존 호출부 무영향.
 };
 export type LLMContentPart = LLMTextPart | LLMImagePart | LLMDocumentPart;
 
@@ -36,7 +37,10 @@ export type ModelTarget = {
   model: string;
 };
 
-export type ModelRouting = Record<RoutingKey, ModelTarget>;
+export type ModelRouting = Record<RoutingKey, ModelTarget> & {
+  default?: ModelTarget; // 페이즈 0의 기본 AI 모델 (배치 5)
+  rubric?: ModelTarget;  // 루브릭 전담 모델 (배치 7). 폴백: rubric ?? default ?? evaluate
+};
 
 export type LLMResult = {
   text: string;

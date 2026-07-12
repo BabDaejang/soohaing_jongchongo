@@ -4,7 +4,7 @@ import type { ApiFormat } from "@/lib/supabase/types";
 // api_format별로 "OCR 가능(비전) 모델"만 제시한다. 교사가 업로드 화면에서 회사+모델을 고른다.
 // 모델 ID는 정확한 문자열만 사용한다(날짜 접미사 금지).
 //   - anthropic: 프로젝트가 쓰는 Claude 모델(둘 다 비전·PDF 입력 지원). 스캔 PDF도 문서 블록으로 직접 처리.
-//   - openai:    비전 가능 모델(이미지만 — chat completions는 PDF 문서 파트 미지원).
+//   - openai:    비전 가능 모델(이미지 + PDF는 file 파트로 매핑 — chat completions file 입력).
 //   - google:    Gemini 비전 모델(inlineData로 이미지·PDF 지원).
 // 카탈로그에 없는 커스텀 프로바이더는 UI에서 자유 입력으로 폴백한다.
 export const VISION_MODELS: Record<ApiFormat, string[]> = {

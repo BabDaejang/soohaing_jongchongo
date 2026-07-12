@@ -484,7 +484,13 @@ export async function updateModelRouting(formData: FormData) {
   const { data: providers } = await supabase.from("providers").select("id");
   const validIds = new Set((providers ?? []).map((p) => p.id));
 
-  const routing = {} as ModelRouting;
+  // 4키만 재조립하면 배치 5의 default·배치 7의 rubric 키가 저장 때마다 소실된다 → 기존 라우팅을 보존.
+  const { data: current } = await supabase
+    .from("projects")
+    .select("model_routing")
+    .eq("id", projectId)
+    .single();
+  const routing: ModelRouting = { ...(current?.model_routing as ModelRouting) };
   for (const key of ROUTING_KEYS) {
     const providerId = String(formData.get(`${key}_provider`) ?? "").trim();
     const model = String(formData.get(`${key}_model`) ?? "").trim();

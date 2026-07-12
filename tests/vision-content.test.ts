@@ -35,17 +35,35 @@ test("toAnthropicContent: PDF는 document 블록", () => {
   );
 });
 
-test("toOpenAIContent: 이미지는 data URI, PDF 문서는 명시적 에러", () => {
+test("toOpenAIContent: 이미지는 data URI, PDF 문서는 file 파트(filename 기본값)", () => {
   assert.deepEqual(
     toOpenAIContent([{ type: "image", mediaType: "image/jpeg", dataBase64: "BBB" }]),
     [{ type: "image_url", image_url: { url: "data:image/jpeg;base64,BBB" } }],
   );
-  assert.throws(
-    () =>
-      toOpenAIContent([
-        { type: "document", mediaType: "application/pdf", dataBase64: "CCC" },
-      ]),
-    /PDF/,
+  assert.deepEqual(
+    toOpenAIContent([
+      { type: "document", mediaType: "application/pdf", dataBase64: "CCC" },
+    ]),
+    [
+      {
+        type: "file",
+        file: { filename: "document.pdf", file_data: "data:application/pdf;base64,CCC" },
+      },
+    ],
+  );
+});
+
+test("toOpenAIContent: PDF file 파트는 전달된 filename을 사용한다", () => {
+  assert.deepEqual(
+    toOpenAIContent([
+      { type: "document", mediaType: "application/pdf", dataBase64: "CCC", filename: "answer.pdf" },
+    ]),
+    [
+      {
+        type: "file",
+        file: { filename: "answer.pdf", file_data: "data:application/pdf;base64,CCC" },
+      },
+    ],
   );
 });
 

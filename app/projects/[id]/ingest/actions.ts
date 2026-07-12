@@ -75,8 +75,11 @@ async function ocrExtract(
   routing: ModelRouting,
   part:
     | { type: "image"; mediaType: string; dataBase64: string }
-    | { type: "document"; mediaType: "application/pdf"; dataBase64: string },
+    | { type: "document"; mediaType: "application/pdf"; dataBase64: string; filename?: string },
 ): Promise<string> {
+  if (!part.dataBase64) {
+    throw new Error("원본 파일 데이터가 비어 있습니다 — 업로드된 원본을 다시 확인하세요.");
+  }
   const res = await callLLM({
     userId,
     purpose: "추출",
@@ -210,6 +213,7 @@ export async function ingestDocuments(
             type: "document",
             mediaType: "application/pdf",
             dataBase64: Buffer.from(bytes).toString("base64"),
+            filename: f.filename,
           });
           sourceType = "pdf_scan";
         } else {

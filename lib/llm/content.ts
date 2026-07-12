@@ -43,10 +43,11 @@ export function toAnthropicContent(
 }
 
 // ── OpenAI 호환 Chat Completions 콘텐츠 ──────────────────────────────
-// PDF 문서 파트는 표준 chat completions가 지원하지 않으므로 명시적 에러.
+// PDF 문서는 file 파트(file_data data URI)로 매핑한다(비전 모델 = gpt-4o 계열 등).
 type OpenAIPart =
   | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
+  | { type: "image_url"; image_url: { url: string } }
+  | { type: "file"; file: { filename: string; file_data: string } };
 
 export function toOpenAIContent(
   content: LLMMessage["content"],
@@ -60,9 +61,13 @@ export function toOpenAIContent(
         image_url: { url: `data:${p.mediaType};base64,${p.dataBase64}` },
       };
     }
-    throw new Error(
-      "openai 형식은 PDF 문서 입력을 지원하지 않습니다. 스캔 PDF OCR은 anthropic 또는 google 프로바이더를 사용하세요.",
-    );
+    return {
+      type: "file",
+      file: {
+        filename: p.filename ?? "document.pdf",
+        file_data: `data:application/pdf;base64,${p.dataBase64}`,
+      },
+    };
   });
 }
 

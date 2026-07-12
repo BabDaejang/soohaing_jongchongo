@@ -27,7 +27,7 @@ export function buildOpenAIChatBody(input: {
 
 // OpenAI 호환 Chat Completions API (POST {baseUrl}/chat/completions).
 // system·user·assistant 역할을 그대로 messages 배열로 보낸다.
-// content가 배열이면 이미지(image_url data URI)로 매핑된다. PDF 파트는 미지원(에러).
+// content가 배열이면 이미지(image_url data URI)로 매핑된다. PDF는 file 파트로 매핑(비전 모델).
 export const openaiAdapter: Adapter = async ({
   baseUrl,
   apiKey,
