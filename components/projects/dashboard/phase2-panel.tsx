@@ -200,6 +200,12 @@ export function Phase2Panel({
               ● 재계산 필요
             </span>
           )}
+          <Link
+            href="/factsheets"
+            className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            도서팩트시트 →
+          </Link>
         </div>
 
         <p className="text-xs text-zinc-500">

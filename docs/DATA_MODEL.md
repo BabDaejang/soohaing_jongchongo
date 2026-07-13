@@ -162,6 +162,9 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | include_in_eval | boolean | not null default true | 평가 반영 체크박스 |
 | include_in_record | boolean | not null default true | 생기부 반영 체크박스 |
 | extraction_approved_at | timestamptz | | 교사의 추출 품질 승인 시각. **NULL이면 원본 파일 삭제 금지 (INV-5)** — 자동 삭제(N일)도 이 조건을 우선한다 (세션 6) |
+| authenticity_status | text | not null, check in ('unverified','not_applicable','verified','suspect','unverifiable'), default 'unverified' | 제출물 진실성 상태 (**리팩토링 2 배치 8 도입, 0013**). unverified=초기 / not_applicable=출처 인용 없음 / verified=확인 / suspect=의심 / unverifiable=판정 불가. 판정 소비는 배치 10 |
+| authenticity | jsonb | | 진실성 검증 근거·리포트(배치 10이 채움). 인용 출처·대조 결과 등 |
+| factsheet_id | uuid | FK → factsheets(id) on delete set null | 이 제출물이 대조에 쓴 도서팩트시트(있으면). 배치 10 소비 |
 | created_at / updated_at | timestamptz | | |
 
 - 중복 감지 로직(세션 5): 업로드 시 `(project_id, 학생 식별값(raw_student_no/name), submission_key)`로 기존 행 조회 → content_hash 동일하면 스킵, 다르면 `match_status='update_pending'` + pending_content에 보관. 하드 unique 제약 대신 애플리케이션 로직(조회용 인덱스만) — update_pending 스테이징을 허용하기 위해 (DECISIONS 2026-07-08).
@@ -170,6 +173,7 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 - 재귀속(SPEC 5.4): `reassignSubmission`이 `student_id` 변경 + `match_status='confirmed'` + `match_method='reassigned'`. audit_logs에 이전/이후 student_id 기록. `flag_project_needs_recalc` 트리거가 "재계산 필요" 배지를 자동으로 세운다.
 - 원본 삭제(세션 6, INV-5): `deleteOriginal` 서버 액션이 `extraction_approved_at IS NULL`이면 거부. Storage 삭제는 API 경로라 DB 트리거로 못 막으므로 액션 가드가 강제 지점. 공유 storage_path(스프레드시트)는 다른 제출물이 참조하면 객체 유지. N일 자동 삭제는 `/api/cron/purge-originals`(CRON_SECRET) + `isPurgeEligible`(미승인 항상 제외).
 - **RLS**(세션 5 마이그레이션 0004): select = `owns_project()` or admin, insert/update/delete = `owns_project()` and 승인됨. Storage 버킷 `originals`(비공개)는 경로 첫 세그먼트(owner_id)=auth.uid() 소유자 정책. 경로는 `{owner_id}/{project_id}/{fileUuid}__{filename}` — 스프레드시트 1파일→다행이라 submission_id를 경로에 못 씀 (DECISIONS 2026-07-08).
+- 진실성 검증(리팩토링 2 배치 8 스키마·배치 10 소비): `authenticity_status`·`authenticity`·`factsheet_id` 3컬럼(0013). 페이즈 2 채점에 **앞선 스테이지**가 인용 출처를 식별해 도서(팩트시트 교차 대조)·URL(원문 fetch 대조)과 맞춰 상태를 세운다. '의심(suspect)'은 **플래그·근거 표시만** — 자동 감점·채점 제외·반영 해제는 없다(교사 판단, 보수 원칙). 3컬럼의 기존 submissions RLS(소유자 update) 정책은 불변 — 배치 10 스테이지는 채점처럼 서버(service role)가 채운다.
 
 ## 9. evaluations — 제출물 단위 LLM 채점
 
@@ -293,8 +297,55 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 
 - **RLS**: insert는 서버 전용(service role). select는 admin + (자기 프로젝트 관련 행은 소유자). update/delete 정책 없음 — append-only.
 
+## 15. factsheets — 도서팩트시트 (리팩토링 2 배치 8, 0013)
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| id | uuid | PK | |
+| owner_id | uuid | not null, FK → profiles(id) on delete cascade | 생성 계정(소유 교사) |
+| isbn13 | text | | 알라딘 확정 ISBN13(수동 생성은 NULL 가능) |
+| title | text | not null | 책 제목 |
+| author | text | | 저자 |
+| publisher | text | | 출판사 |
+| pub_year | text | | 출간 연도(문자열 — 알라딘 원본 그대로) |
+| toc | text | | 알라딘 목차 원본(HTML 제거) — **LLM 비경유** 저장 |
+| intro | text | | 책 소개 원본(HTML 제거) — **LLM 비경유** 저장 |
+| cover_url | text | | 표지 이미지 URL |
+| share_status | text | not null, check in ('private','pending_review','shared','rejected'), default 'private' | 공유 상태(아래) |
+| review | jsonb | | 관리자 AI 엄격 검증 리포트(배치 11) |
+| reviewed_by | uuid | FK → profiles(id) on delete set null | 승인·반려 관리자(배치 11) |
+| reviewed_at | timestamptz | | 검토 시각(배치 11) |
+| forked_from | uuid | FK → factsheets(id) on delete set null | shared 복제 출처 |
+| created_at | timestamptz | not null default now() | |
+| updated_at | timestamptz | | |
+
+- unique partial index: `(owner_id, isbn13) where isbn13 is not null` — 같은 계정에 같은 책 팩트시트 중복 생성 방지. shared에 같은 isbn이 있어도 내 소유 생성은 허용(따로 관리).
+- **공유 상태 `share_status`**: `private`(생성 계정 전용) → `pending_review`(전체 공유 신청) → `shared`(관리자 승인 — 전 계정 읽기 전용) / `rejected`(반려). 교사는 자기 것을 `shared`·`rejected`로 만들 수 없다(관리자만) — RLS with check로 강제.
+- **무할루시네이션 원칙**: 메타(목차 toc·소개 intro)는 알라딘 API 원본을 LLM 비경유로 저장한다. 챕터별 사실은 factsheet_entries에만, **수집 원문 스니펫 대조를 통과한 것만** 저장(배치 9의 `filterBySnippetMatch`). LLM 내부 지식으로 내용을 생성하는 경로를 만들지 않는다.
+- **RLS**(0013): SECURITY DEFINER 헬퍼 `can_read_factsheet(fid)`(owner or shared or admin)·`can_edit_factsheet(fid)`(owner and share_status≠shared and 승인 or admin). select = owner or shared or admin / insert = owner and 승인 / update = using(owner and share_status≠shared) or admin, with check(owner면 share_status in ('private','pending_review'); admin 무제한) / delete = (owner and share_status≠shared) or admin.
+
+## 15-1. factsheet_entries — 챕터별 사실 항목 (리팩토링 2 배치 8, 0013)
+
+| 컬럼 | 타입 | 제약 | 설명 |
+| --- | --- | --- | --- |
+| id | uuid | PK | |
+| factsheet_id | uuid | not null, FK → factsheets(id) on delete cascade | 소속 팩트시트 |
+| owner_id | uuid | not null, FK → profiles(id) on delete cascade | RLS 단순화용 비정규화(factsheets.owner_id 사본) |
+| chapter_label | text | not null default '전체' | 예: '3장', 'p.120-135' |
+| content | text | not null | 사실 서술(수집 원문 근거) |
+| quote | text | | 원문 발췌 스니펫(서버 스니펫 대조 통과분). `user_manual`은 NULL 허용 |
+| source_url | text | | 출처 URL. `user_upload`/`user_manual`이면 NULL |
+| source_type | text | not null, check in ('aladin','naver_book','naver_blog','naver_news','web','user_upload','user_manual') | 항목 출처 유형 |
+| content_hash | text | not null | 내용 해시 — 보강 중복 누적 방지 |
+| created_at | timestamptz | not null default now() | |
+
+- unique: `(factsheet_id, content_hash)` — 같은 내용을 재수집해도 중복 insert되지 않는다(보강 누적 방지).
+- 출처 유형: `aladin`/`naver_book`/`naver_blog`/`naver_news`/`web`은 웹 수집(quote·source_url 有, 배치 9 자동 수집), `user_upload`는 촬영본 OCR(원본 파일 미저장·텍스트만, source_url NULL), `user_manual`은 교사 직접 입력(quote·source_url NULL).
+- **RLS**(0013): select = `can_read_factsheet(factsheet_id)` / insert·update·delete = `can_edit_factsheet(factsheet_id)`. shared 팩트시트는 교사에게 완전 읽기 전용 — 보강하려면 내 계정으로 복제(fork) 후.
+
 ## Storage (테이블 아님)
 
 - 버킷 `originals` (비공개, 세션 5 마이그레이션 0004 도입): 원본 파일 임시 보관. 경로 `{owner_id}/{project_id}/{fileUuid}__{filename}` — 스프레드시트는 1파일이 다수 행(제출물)으로 분해되어 submission_id를 경로에 쓸 수 없으므로 파일 단위 uuid를 쓴다 (DECISIONS 2026-07-08).
 - 정책(0004): 경로 첫 세그먼트(owner_id) = auth.uid()인 소유자만 read/write (select/insert/update/delete 4정책).
 - 삭제 조건: 해당 submission의 `extraction_approved_at IS NOT NULL` (INV-5). 자동 삭제(N일) 배치도 동일 조건 필수 — 삭제 흐름은 세션 6.
+- 팩트시트 촬영본 보강(배치 8)은 **원본 파일을 Storage에 저장하지 않는다** — OCR로 추출한 텍스트만 factsheet_entries에 담는다(INV-5 표면 확장 방지).

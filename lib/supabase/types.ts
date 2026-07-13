@@ -169,6 +169,14 @@ export type MatchMethod =
 // 매칭에 쓴 학번·이름의 출처 (0011, SPEC 5.2).
 export type IdentitySource = "column" | "filename" | "llm";
 
+// 제출물 진실성 상태 (0013, 리팩토링 2 배치 8 스키마·배치 10 소비).
+export type AuthenticityStatus =
+  | "unverified" // 초기
+  | "not_applicable" // 출처 인용 없음
+  | "verified" // 확인
+  | "suspect" // 의심(플래그만 — 자동 감점·제외 없음)
+  | "unverifiable"; // 판정 불가
+
 export type Submission = {
   id: string;
   project_id: string;
@@ -189,6 +197,9 @@ export type Submission = {
   include_in_eval: boolean;
   include_in_record: boolean;
   extraction_approved_at: string | null;
+  authenticity_status: AuthenticityStatus; // 0013 (배치 10 소비)
+  authenticity: unknown; // 진실성 검증 근거·리포트(배치 10)
+  factsheet_id: string | null; // 대조에 쓴 도서팩트시트(배치 10)
   created_at: string;
   updated_at: string | null;
 };
@@ -299,6 +310,53 @@ export type UiLayout = {
   project_id: string;
   layout: unknown;
   updated_at: string;
+};
+
+// factsheets (DATA_MODEL 15절, 리팩토링 2 배치 8, 0013). 도서팩트시트 — 계정 단위.
+export type ShareStatus = "private" | "pending_review" | "shared" | "rejected";
+
+export type Factsheet = {
+  id: string;
+  owner_id: string;
+  isbn13: string | null;
+  title: string;
+  author: string | null;
+  publisher: string | null;
+  pub_year: string | null;
+  toc: string | null; // 알라딘 목차 원본(HTML 제거) — LLM 비경유
+  intro: string | null; // 책 소개 원본 — LLM 비경유
+  cover_url: string | null;
+  share_status: ShareStatus;
+  review: unknown; // 관리자 AI 엄격 검증 리포트(배치 11)
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  forked_from: string | null;
+  created_at: string;
+  updated_at: string | null;
+};
+
+// factsheet_entries (DATA_MODEL 15-1절, 0013). 챕터별 사실 항목.
+//   수집 원문 스니펫 대조를 통과한 것만 저장(배치 9). 메타(toc·intro)는 LLM 비경유.
+export type FactsheetSourceType =
+  | "aladin"
+  | "naver_book"
+  | "naver_blog"
+  | "naver_news"
+  | "web"
+  | "user_upload" // 촬영본 OCR(원본 파일 미저장·텍스트만)
+  | "user_manual"; // 교사 직접 입력
+
+export type FactsheetEntry = {
+  id: string;
+  factsheet_id: string;
+  owner_id: string;
+  chapter_label: string;
+  content: string;
+  quote: string | null; // 원문 발췌 스니펫(user_manual은 null)
+  source_url: string | null; // user_upload/user_manual이면 null
+  source_type: FactsheetSourceType;
+  content_hash: string;
+  created_at: string;
 };
 
 // Supabase 클라이언트 제네릭용 스키마 타입.
@@ -456,6 +514,9 @@ export type Database = {
             | "include_in_eval"
             | "include_in_record"
             | "extraction_approved_at"
+            | "authenticity_status"
+            | "authenticity"
+            | "factsheet_id"
           >
         >;
         Relationships: [];
@@ -559,6 +620,58 @@ export type Database = {
           updated_at?: string;
         };
         Update: Partial<{ layout: StoredLayout; updated_at: string }>;
+        Relationships: [];
+      };
+      // factsheets (0013, 배치 8). RLS: owner/shared/admin. shared 전이는 admin만(with check).
+      factsheets: {
+        Row: Factsheet;
+        Insert: {
+          owner_id: string;
+          title: string;
+          isbn13?: string | null;
+          author?: string | null;
+          publisher?: string | null;
+          pub_year?: string | null;
+          toc?: string | null;
+          intro?: string | null;
+          cover_url?: string | null;
+          share_status?: ShareStatus;
+          forked_from?: string | null;
+        };
+        Update: Partial<
+          Pick<
+            Factsheet,
+            | "title"
+            | "author"
+            | "publisher"
+            | "pub_year"
+            | "toc"
+            | "intro"
+            | "cover_url"
+            | "share_status"
+            | "review"
+            | "reviewed_by"
+            | "reviewed_at"
+          >
+        >;
+        Relationships: [];
+      };
+      // factsheet_entries (0013, 배치 8). RLS: can_read/can_edit_factsheet. unique(factsheet_id, content_hash).
+      factsheet_entries: {
+        Row: FactsheetEntry;
+        Insert: {
+          factsheet_id: string;
+          owner_id: string;
+          content: string;
+          source_type: FactsheetSourceType;
+          content_hash: string;
+          chapter_label?: string;
+          quote?: string | null;
+          source_url?: string | null;
+        };
+        Update: Partial<
+          Pick<FactsheetEntry, "chapter_label" | "content" | "content_hash" | "quote">
+        >;
         Relationships: [];
       };
     };
