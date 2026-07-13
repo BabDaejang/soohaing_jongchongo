@@ -7,6 +7,11 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { writeAuditLog } from "@/lib/audit";
 import { encrypt, keyLast4 } from "@/lib/crypto";
 import { validateKeyAndListModels, refreshKeyModels } from "@/lib/llm/key-sync";
+import {
+  reviewEntryStrict,
+  reviewMetaStrict,
+  type EntryReview,
+} from "@/lib/factsheet/strict-review";
 import type { ApiFormat } from "@/lib/supabase/types";
 
 // ── 계정 승인/거부/삭제 ──────────────────────────────────────────────
@@ -230,4 +235,216 @@ export async function deleteDefaultKey(formData: FormData) {
     detail: { scope: "default" },
   });
   revalidatePath("/admin");
+}
+
+// ── 팩트시트 공유 승인 · AI 엄격 검증 (리팩토링 2 배치 11) ──────────────
+//
+// 공유 모델(사용자 확정 2026-07-13): private → pending_review(교사 신청) → shared(관리자 승인).
+// 승인 전 AI가 출처를 재수집해 발췌 실존·내용 뒷받침을 엄격 검증하고, 관리자가 리포트를 참고해
+// 승인/반려한다(자동 승인·반려 없음 — 판정은 참고 자료). 팩트시트 update는 admin RLS로 통과한다.
+
+// [AI 엄격 검증 실행]의 prepare — entry 목록을 대상으로 조립(LLM 없음).
+const REVIEW_SOURCE_SHORT: Record<string, string> = {
+  aladin: "알라딘",
+  naver_book: "네이버 책",
+  naver_blog: "블로그",
+  naver_news: "뉴스",
+  web: "웹",
+  user_upload: "촬영본",
+  user_manual: "직접 입력",
+};
+
+export async function prepareStrictReview(factsheetId: string): Promise<{
+  targets: { id: string; label: string }[];
+  prelude: { level: "system" | "info" | "error"; text: string }[];
+}> {
+  await requireAdmin();
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("factsheet_entries")
+    .select("id, chapter_label, source_type")
+    .eq("factsheet_id", factsheetId)
+    .order("created_at", { ascending: true }); // RLS can_read_factsheet(admin 포함)
+  if (error) {
+    return { targets: [], prelude: [{ level: "error", text: error.message.slice(0, 300) }] };
+  }
+  const list = data ?? [];
+  return {
+    targets: list.map((e) => ({
+      id: e.id,
+      label: `${e.chapter_label} · ${REVIEW_SOURCE_SHORT[e.source_type] ?? e.source_type}`,
+    })),
+    prelude: [{ level: "system", text: `검증 대상 entry ${list.length}건` }],
+  };
+}
+
+// entry 1건 엄격 검증. 반환은 EntryReview의 상위집합({ok,message} 추가 — 배치 9·10 선례).
+export async function reviewEntryStrictAction(
+  factsheetId: string,
+  entryId: string,
+  providerId: string,
+  model: string,
+): Promise<EntryReview & { ok: boolean; message: string }> {
+  const { userId } = await requireAdmin();
+  const fail = (note: string): EntryReview & { ok: boolean; message: string } => ({
+    entryId,
+    result: "unfetchable",
+    note,
+    ok: false,
+    message: note,
+  });
+  if (!providerId || !model.trim()) return fail("검증 모델을 선택하세요(키 보유 프로바이더).");
+
+  const supabase = await createClient();
+  const { data: entry, error } = await supabase
+    .from("factsheet_entries")
+    .select("id, chapter_label, content, quote, source_url, factsheet_id")
+    .eq("id", entryId)
+    .maybeSingle(); // RLS can_read_factsheet(admin 포함)
+  if (error) return fail(error.message.slice(0, 300));
+  if (!entry || entry.factsheet_id !== factsheetId) return fail("항목을 찾을 수 없습니다.");
+
+  const review = await reviewEntryStrict(
+    entry,
+    { provider_id: providerId, model: model.trim() },
+    userId,
+  );
+  const label =
+    review.result === "pass" ? "통과" : review.result === "fail" ? "실패" : "재확인 불가";
+  return {
+    ...review,
+    ok: review.result === "pass",
+    message: `${label} — ${review.note}`,
+  };
+}
+
+// finalize — 메타 재확인 + review jsonb 저장 + audit. reviewed_by/at은 승인·반려 시 기록한다.
+export async function finalizeStrictReview(
+  factsheetId: string,
+  reviews: EntryReview[],
+  model: string,
+): Promise<string> {
+  const { userId } = await requireAdmin();
+  const supabase = await createClient();
+
+  const { data: fs } = await supabase
+    .from("factsheets")
+    .select("isbn13, title, author")
+    .eq("id", factsheetId)
+    .maybeSingle();
+  const metaCheck = fs
+    ? await reviewMetaStrict(fs)
+    : { status: "skipped" as const, note: "팩트시트를 찾을 수 없습니다." };
+
+  const summary = {
+    pass: reviews.filter((r) => r.result === "pass").length,
+    fail: reviews.filter((r) => r.result === "fail").length,
+    unfetchable: reviews.filter((r) => r.result === "unfetchable").length,
+  };
+  const report = {
+    summary,
+    entries: reviews,
+    metaCheck,
+    model,
+    reviewed_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from("factsheets")
+    .update({ review: report })
+    .eq("id", factsheetId); // admin RLS
+  if (error) throw new Error(error.message);
+
+  await writeAuditLog({
+    actorId: userId,
+    action: "factsheet.strict_review",
+    entity: "factsheets",
+    entityId: factsheetId,
+    detail: { ...summary, meta: metaCheck.status },
+  });
+  revalidatePath("/admin");
+  return `엄격 검증 완료 — 통과 ${summary.pass}·실패 ${summary.fail}·재확인 불가 ${summary.unfetchable} / 메타 ${
+    metaCheck.status === "ok" ? "일치" : metaCheck.status === "warn" ? "경고" : "생략"
+  }`;
+}
+
+// [승인] — 전 계정 읽기 전용 공유. fail 건이 있어도 관리자 판단으로 승인 가능(클라이언트가 경고 확인).
+export async function approveFactsheet(id: string): Promise<void> {
+  const { userId } = await requireAdmin();
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("factsheets")
+    .update({
+      share_status: "shared",
+      reviewed_by: userId,
+      reviewed_at: new Date().toISOString(),
+    })
+    .eq("id", id); // admin RLS
+  if (error) throw new Error(error.message);
+  await writeAuditLog({
+    actorId: userId,
+    action: "factsheet.approve",
+    entity: "factsheets",
+    entityId: id,
+  });
+  revalidatePath("/admin");
+  revalidatePath("/factsheets");
+}
+
+// [반려] — 사유 필수. review에 반려 사유를 병기하고 rejected로 전이(교사가 사유 확인 후 재신청).
+export async function rejectFactsheet(id: string, reason: string): Promise<void> {
+  const { userId } = await requireAdmin();
+  const r = reason.trim();
+  if (!r) throw new Error("반려 사유를 입력하세요.");
+  const supabase = await createClient();
+
+  const { data: fs } = await supabase
+    .from("factsheets")
+    .select("review")
+    .eq("id", id)
+    .maybeSingle();
+  const prev =
+    fs?.review && typeof fs.review === "object" && !Array.isArray(fs.review)
+      ? (fs.review as Record<string, unknown>)
+      : {};
+  const review = { ...prev, rejected_reason: r, rejected_at: new Date().toISOString() };
+
+  const { error } = await supabase
+    .from("factsheets")
+    .update({
+      share_status: "rejected",
+      reviewed_by: userId,
+      reviewed_at: new Date().toISOString(),
+      review,
+    })
+    .eq("id", id); // admin RLS
+  if (error) throw new Error(error.message);
+  await writeAuditLog({
+    actorId: userId,
+    action: "factsheet.reject",
+    entity: "factsheets",
+    entityId: id,
+    detail: { reason: r.slice(0, 200) },
+  });
+  revalidatePath("/admin");
+  revalidatePath("/factsheets");
+}
+
+// [공유 철회] — shared → private(전 계정 접근 회수, 소유 교사가 다시 편집·재신청 가능).
+export async function unshareFactsheet(id: string): Promise<void> {
+  const { userId } = await requireAdmin();
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("factsheets")
+    .update({ share_status: "private" })
+    .eq("id", id); // admin RLS
+  if (error) throw new Error(error.message);
+  await writeAuditLog({
+    actorId: userId,
+    action: "factsheet.unshare",
+    entity: "factsheets",
+    entityId: id,
+  });
+  revalidatePath("/admin");
+  revalidatePath("/factsheets");
 }
