@@ -1,19 +1,27 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   addManualEntry,
   cancelShareRequest,
   deleteEntry,
+  enrichOneSource,
+  finalizeEnrichment,
   forkFactsheet,
   ocrExtractForFactsheet,
+  prepareEnrichment,
   requestShare,
   updateEntry,
   updateFactsheetMeta,
 } from "@/app/factsheets/actions";
 import { VISION_MODELS } from "@/lib/llm/vision-models";
 import { isVisionCapableModel } from "@/lib/llm/vision-capability";
+import {
+  useSequentialRun,
+  type SequentialTarget,
+} from "@/lib/hooks/use-sequential-run";
+import { RunTerminal } from "@/components/projects/run-terminal";
 import type { RoutableProvider } from "@/lib/llm/available";
 import type {
   Factsheet,
@@ -71,8 +79,175 @@ export function FactsheetDetail({
         </p>
       )}
       <EntriesSection factsheetId={factsheet.id} entries={entries} editable={editable} />
+      {editable && (
+        <EnrichSection
+          factsheetId={factsheet.id}
+          entryCount={entries.length}
+          providers={providers}
+        />
+      )}
       {editable && <OcrSection factsheetId={factsheet.id} providers={providers} />}
     </div>
+  );
+}
+
+// ── 자동 보강(웹 수집 터미널) ─────────────────────────────────────────
+
+// 웹 문서 1건 단위로 수집→추출→스니펫 대조 저장을 실행한다(useSequentialRun 재사용).
+// 추출은 텍스트 작업이라 비전 필터 없이 사용자의 키 보유 프로바이더 모델을 그대로 쓴다.
+function EnrichSection({
+  factsheetId,
+  entryCount,
+  providers,
+}: {
+  factsheetId: string;
+  entryCount: number;
+  providers: RoutableProvider[];
+}) {
+  const router = useRouter();
+
+  const [providerId, setProviderId] = useState(
+    () => providers.find((p) => p.keySource !== null)?.id ?? providers[0]?.id ?? "",
+  );
+  const provider = providers.find((p) => p.id === providerId);
+  const catalog = useMemo(() => provider?.models ?? [], [provider]);
+  const [modelChoice, setModelChoice] = useState("");
+  const [customModel, setCustomModel] = useState("");
+  const effectiveModel =
+    (modelChoice || catalog[0] || CUSTOM) === CUSTOM
+      ? customModel.trim()
+      : modelChoice || catalog[0] || "";
+  const noKey = provider?.keySource === null || !provider;
+
+  // start() 직전에 캡처해 stepOne이 읽는다(한 실행은 고정 모델). added는 finalize가 합산.
+  const providerRef = useRef(providerId);
+  const modelRef = useRef(effectiveModel);
+  const addedRef = useRef(0);
+
+  const prepare = useCallback(() => prepareEnrichment(factsheetId), [factsheetId]);
+  const stepOne = useCallback(
+    async (t: SequentialTarget) => {
+      const r = await enrichOneSource(
+        factsheetId,
+        t.id,
+        providerRef.current,
+        modelRef.current,
+      );
+      if (r.ok && r.added > 0) {
+        addedRef.current += r.added;
+        router.refresh(); // 성공 1건마다 entry 목록 갱신
+      }
+      return { ok: r.ok, message: r.message };
+    },
+    [factsheetId, router],
+  );
+  const finalize = useCallback(async () => {
+    await finalizeEnrichment(factsheetId);
+    router.refresh();
+    return `보강 완료 — entry ${addedRef.current}건 추가`;
+  }, [factsheetId, router]);
+
+  const { lines, runState, progress, start, pause, resume, stop } =
+    useSequentialRun({ prepare, stepOne, finalize });
+  const running =
+    runState === "running" || runState === "paused" || runState === "stopping";
+
+  const onRun = () => {
+    if (running || noKey || !effectiveModel) return;
+    providerRef.current = providerId;
+    modelRef.current = effectiveModel;
+    addedRef.current = 0;
+    start();
+  };
+
+  return (
+    <section className="flex flex-col gap-2 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
+      <h2 className="text-sm font-semibold">
+        웹 자동 {entryCount === 0 ? "수집" : "보강"}
+      </h2>
+      <p className="text-xs text-zinc-500">
+        도서 검색으로 찾은 웹 문서(블로그·뉴스·책)를 문서 1건씩 읽어, 원문에 실제로 있는
+        문장(인용)만 대조를 통과시켜 챕터 항목으로 저장합니다. 원문에 없는 내용은 저장되지
+        않습니다.
+      </p>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          회사(프로바이더)
+          <select
+            value={providerId}
+            onChange={(e) => {
+              setProviderId(e.target.value);
+              setModelChoice("");
+            }}
+            disabled={running}
+            className={inputClass}
+          >
+            {providers.map((p) => (
+              <option key={p.id} value={p.id} disabled={p.keySource === null}>
+                {p.name}
+                {p.keySource === null ? " (키 없음)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          추출 모델
+          <select
+            value={modelChoice || catalog[0] || CUSTOM}
+            onChange={(e) => setModelChoice(e.target.value)}
+            className={inputClass}
+            disabled={noKey || running}
+          >
+            {catalog.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+            <option value={CUSTOM}>직접 입력…</option>
+          </select>
+        </label>
+        {(modelChoice || catalog[0] || CUSTOM) === CUSTOM && (
+          <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            모델명
+            <input
+              value={customModel}
+              onChange={(e) => setCustomModel(e.target.value)}
+              placeholder="예: gpt-4o-mini"
+              className={inputClass}
+              disabled={noKey || running}
+            />
+          </label>
+        )}
+        <button
+          type="button"
+          onClick={onRun}
+          disabled={running || noKey || !effectiveModel}
+          className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900"
+        >
+          {running
+            ? "수집 중…"
+            : entryCount === 0
+              ? "자동 수집"
+              : "자동 보강"}
+        </button>
+      </div>
+
+      {noKey && (
+        <p className="text-xs text-amber-600 dark:text-amber-500">
+          이 프로바이더는 등록된 API 키가 없습니다 — 계정에서 키를 먼저 등록하세요.
+        </p>
+      )}
+
+      <RunTerminal
+        lines={lines}
+        runState={runState}
+        progress={progress}
+        onPause={pause}
+        onResume={resume}
+        onStop={stop}
+      />
+    </section>
   );
 }
 

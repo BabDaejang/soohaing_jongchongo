@@ -4,6 +4,12 @@ import { revalidatePath } from "next/cache";
 import { requireApproved } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 import { searchBooks, lookupBook, type BookCandidate } from "@/lib/factsheet/aladin";
+import { hasNaverKeys } from "@/lib/factsheet/naver";
+import {
+  planCollection,
+  collectOneSource,
+  type CollectTarget,
+} from "@/lib/factsheet/build";
 import { callLLM, type ModelTarget } from "@/lib/llm";
 import type { LLMContentPart } from "@/lib/llm";
 import {
@@ -360,4 +366,121 @@ export async function ocrExtractForFactsheet(
       message: (e instanceof Error ? e.message : "OCR 처리 중 오류").slice(0, 300),
     };
   }
+}
+
+// ── 자동 보강(웹 수집 파이프라인) ──────────────────────────────────────
+// [자동 보강] 터미널의 준비·1건 실행. useSequentialRun(문서 1건 단위)로 구동한다.
+// 무할루시네이션: collectOneSource가 원문 스니펫 대조를 통과한 entry만 저장한다(배치 9).
+
+// URL 호스트로 entry의 source_type을 추정한다(재검증 단순화 — 결과는 어차피 대조 통과분만 저장).
+function sourceTypeForUrl(url: string): CollectTarget["sourceType"] {
+  const u = url.toLowerCase();
+  if (u.includes("blog.naver.com")) return "naver_blog";
+  if (u.includes("news.naver.com") || u.includes("n.news.naver")) return "naver_news";
+  if (u.includes("book.naver.com")) return "naver_book";
+  return "web";
+}
+
+type EnrichPrelude = { level: "system" | "info" | "error"; text: string };
+
+// 수집 대상 URL 목록 + 선행 로그를 조립한다(useSequentialRun.prepare 형태). LLM 없음.
+export async function prepareEnrichment(
+  factsheetId: string,
+): Promise<{ targets: { id: string; label: string }[]; prelude: EnrichPrelude[] }> {
+  await requireApproved();
+  const supabase = await createClient();
+
+  const { data: fs } = await supabase
+    .from("factsheets")
+    .select("share_status, title, author")
+    .eq("id", factsheetId)
+    .maybeSingle();
+  if (!fs) {
+    return { targets: [], prelude: [{ level: "error", text: "팩트시트를 찾을 수 없습니다." }] };
+  }
+  if (fs.share_status === "shared") {
+    return {
+      targets: [],
+      prelude: [
+        { level: "system", text: "공유 팩트시트는 보강할 수 없습니다 — 복제 후 보강하세요." },
+      ],
+    };
+  }
+  if (!hasNaverKeys()) {
+    return {
+      targets: [],
+      prelude: [
+        {
+          level: "system",
+          text: "검색 키 미설정 — 관리자가 네이버 검색 API 키를 등록해야 자동 수집이 동작합니다.",
+        },
+      ],
+    };
+  }
+
+  const { data: entries } = await supabase
+    .from("factsheet_entries")
+    .select("source_url")
+    .eq("factsheet_id", factsheetId);
+  const excludeUrls = (entries ?? [])
+    .map((e) => e.source_url)
+    .filter((u): u is string => !!u);
+
+  let targets: CollectTarget[] = [];
+  try {
+    targets = await planCollection({ title: fs.title, author: fs.author }, excludeUrls);
+  } catch (e) {
+    return {
+      targets: [],
+      prelude: [
+        {
+          level: "error",
+          text: (e instanceof Error ? e.message : "수집 대상 조회 실패").slice(0, 300),
+        },
+      ],
+    };
+  }
+
+  return {
+    targets: targets.map((t) => ({ id: t.url, label: t.label })),
+    prelude: [
+      {
+        level: "system",
+        text: `수집 대상 ${targets.length}건 · 기존 entry ${entries?.length ?? 0}건`,
+      },
+    ],
+  };
+}
+
+// 수집 대상 1건 처리. URL 형식만 재검증하고(단순화) collectOneSource에 위임한다.
+export async function enrichOneSource(
+  factsheetId: string,
+  url: string,
+  providerId: string,
+  model: string,
+): Promise<{ ok: boolean; message: string; added: number }> {
+  const { userId } = await requireApproved();
+  const clean = url.trim();
+  if (!/^https?:\/\//i.test(clean)) {
+    return { ok: false, message: "URL 형식이 올바르지 않습니다.", added: 0 };
+  }
+  if (!providerId || !model.trim()) {
+    return { ok: false, message: "추출 모델을 선택하세요.", added: 0 };
+  }
+  const target: CollectTarget = {
+    url: clean,
+    sourceType: sourceTypeForUrl(clean),
+    label: clean,
+  };
+  return collectOneSource(userId, factsheetId, target, {
+    provider_id: providerId,
+    model: model.trim(),
+  });
+}
+
+// 보강 종료 시 entry 목록·목록 페이지를 갱신한다.
+export async function finalizeEnrichment(factsheetId: string): Promise<void> {
+  await requireApproved();
+  revalidatePath(`/factsheets/${factsheetId}`);
+  revalidatePath("/factsheets");
 }
