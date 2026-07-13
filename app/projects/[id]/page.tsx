@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { assembleWorksheetRows } from "@/lib/worksheet/assemble";
+import { WorksheetTable } from "@/components/projects/worksheet/worksheet-table";
 
 // 프로젝트 홈 — 처음 쓰는 교사도 흐름을 알 수 있도록 준비 단계 + Phase 1/2/3 안내 (SPEC 4~8절).
 export default async function ProjectHomePage({
@@ -18,6 +20,37 @@ export default async function ProjectHomePage({
     .eq("id", id)
     .maybeSingle();
   if (!project) notFound();
+
+  // 작업결과표(하단 임시 장착, 배치 3) — 액션과 동일한 4쿼리 + 공용 조립 함수(중복 금지).
+  // ui_layouts는 RLS(user_id = auth.uid())로 본인 레이아웃만 조회된다.
+  const [wsStudents, wsSubs, wsScores, wsRecords, wsLayout] = await Promise.all([
+    supabase
+      .from("students")
+      .select("id, student_number, name, teacher_memo, score_override, override_reason")
+      .eq("project_id", id),
+    supabase
+      .from("submissions")
+      .select("id, student_id, source_filename, submission_key")
+      .eq("project_id", id)
+      .not("student_id", "is", null),
+    supabase
+      .from("student_scores")
+      .select("student_id, display_score, grade")
+      .eq("project_id", id),
+    supabase
+      .from("records")
+      .select("student_id, content, version")
+      .eq("project_id", id)
+      .eq("is_current", true),
+    supabase.from("ui_layouts").select("layout").eq("project_id", id).maybeSingle(),
+  ]);
+
+  const worksheetRows = assembleWorksheetRows({
+    students: wsStudents.data ?? [],
+    submissions: wsSubs.data ?? [],
+    scores: wsScores.data ?? [],
+    records: wsRecords.data ?? [],
+  });
 
   return (
     <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-10">
@@ -98,6 +131,20 @@ export default async function ProjectHomePage({
           </Link>
           에서 전체 학생의 등급·메모·생기부를 한 화면에서 열람·편집할 수 있습니다.
         </p>
+      </section>
+
+      {/* 작업결과표 (전폭 full-bleed, 엑셀 시트형) — 배치 3 임시 장착. 배치 5에서 대시보드 구조로 이동. */}
+      <section
+        id="worksheet"
+        className="relative left-1/2 mt-12 w-screen -translate-x-1/2 px-3"
+      >
+        <h2 className="mb-3 text-lg font-semibold">작업결과표</h2>
+        <WorksheetTable
+          projectId={project.id}
+          projectName={project.name}
+          initialRows={worksheetRows}
+          initialLayout={wsLayout.data?.layout ?? null}
+        />
       </section>
     </main>
   );

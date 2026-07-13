@@ -5,6 +5,11 @@
 
 import type { ModelRouting } from "@/lib/llm/types";
 import type { LayoutState } from "@/lib/records/layout";
+import type { WorksheetLayout } from "@/lib/worksheet/layout";
+
+// ui_layouts.layout에 저장되는 레이아웃 형태(신뢰 경계 — 항상 normalize 후 저장).
+// 결과 표(구, 배치 4에서 제거)와 작업결과표(배치 3~)가 같은 (user_id, project_id) 행을 공유한다.
+type StoredLayout = LayoutState | WorksheetLayout;
 
 export type ProfileRole = "admin" | "user";
 export type ProfileStatus = "pending" | "approved" | "rejected";
@@ -551,10 +556,10 @@ export type Database = {
         Insert: {
           user_id: string;
           project_id: string;
-          layout: LayoutState;
+          layout: StoredLayout;
           updated_at?: string;
         };
-        Update: Partial<{ layout: LayoutState; updated_at: string }>;
+        Update: Partial<{ layout: StoredLayout; updated_at: string }>;
         Relationships: [];
       };
     };
