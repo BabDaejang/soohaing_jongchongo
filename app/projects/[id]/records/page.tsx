@@ -97,10 +97,10 @@ export default async function RecordsPage({
           <h1 className="text-2xl font-bold">생기부 생성</h1>
           <div className="flex items-center gap-2">
             <Link
-              href={`/projects/${project.id}/results`}
+              href={`/projects/${project.id}#worksheet`}
               className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
             >
-              결과 표
+              작업결과표
             </Link>
             <Link
               href={`/projects/${project.id}/profile`}

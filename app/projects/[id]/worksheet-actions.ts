@@ -40,8 +40,8 @@ export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRo
   });
 }
 
-// 레이아웃 저장(참조 구현: results/actions.ts의 saveLayout). ui_layouts (user_id, project_id)당
-// 1행 upsert. 신뢰 경계: 서버가 프로젝트 학생 목록 기준으로 normalizeWorksheetLayout 재정규화.
+// 레이아웃 저장. ui_layouts (user_id, project_id)당 1행 upsert.
+// 신뢰 경계: 서버가 프로젝트 학생 목록 기준으로 normalizeWorksheetLayout 재정규화.
 export async function saveWorksheetLayout(
   projectId: string,
   layout: unknown,

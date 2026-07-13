@@ -4,12 +4,11 @@
 // interface가 아닌 type 별칭으로 선언해야 한다.
 
 import type { ModelRouting } from "@/lib/llm/types";
-import type { LayoutState } from "@/lib/records/layout";
 import type { WorksheetLayout } from "@/lib/worksheet/layout";
 
 // ui_layouts.layout에 저장되는 레이아웃 형태(신뢰 경계 — 항상 normalize 후 저장).
-// 결과 표(구, 배치 4에서 제거)와 작업결과표(배치 3~)가 같은 (user_id, project_id) 행을 공유한다.
-type StoredLayout = LayoutState | WorksheetLayout;
+// 구 결과 표(/results)는 배치 4에서 제거되어 작업결과표만 이 행을 사용한다.
+type StoredLayout = WorksheetLayout;
 
 export type ProfileRole = "admin" | "user";
 export type ProfileStatus = "pending" | "approved" | "rejected";
@@ -292,8 +291,8 @@ export type PromptProfileVersion = {
   created_at: string;
 };
 
-// ui_layouts (DATA_MODEL 13절, 세션 8b). 결과 표 레이아웃 저장 — (user_id, project_id)당 1행.
-// layout jsonb는 저장 시·읽을 때 항상 normalizeLayout으로 검증한다(신뢰 경계) → Row는 unknown.
+// ui_layouts (DATA_MODEL 13절, 세션 8b). 작업결과표 레이아웃 저장 — (user_id, project_id)당 1행.
+// layout jsonb는 저장 시·읽을 때 항상 normalizeWorksheetLayout으로 검증한다(신뢰 경계) → Row는 unknown.
 export type UiLayout = {
   id: string;
   user_id: string;

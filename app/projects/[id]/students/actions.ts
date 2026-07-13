@@ -30,7 +30,7 @@ export async function addStudent(formData: FormData) {
     throw new Error(error.message);
   }
 
-  revalidatePath(`/projects/${projectId}/students`);
+  revalidatePath(`/projects/${projectId}`);
 }
 
 // ── 학생 정보 수정 (이름·학번) ────────────────────────────────────────
@@ -55,7 +55,7 @@ export async function updateStudent(formData: FormData) {
     throw new Error(error.message);
   }
 
-  revalidatePath(`/projects/${projectId}/students`);
+  revalidatePath(`/projects/${projectId}`);
 }
 
 // ── 학생 삭제 ─────────────────────────────────────────────────────────
@@ -71,7 +71,7 @@ export async function deleteStudent(formData: FormData) {
     .eq("project_id", projectId);
   if (error) throw new Error(error.message);
 
-  revalidatePath(`/projects/${projectId}/students`);
+  revalidatePath(`/projects/${projectId}`);
 }
 
 // ── 교사 관찰 메모 자동 저장 (SPEC 7.4) ──────────────────────────────

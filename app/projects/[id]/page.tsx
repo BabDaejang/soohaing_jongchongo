@@ -16,7 +16,7 @@ export default async function ProjectHomePage({
   // RLS로 본인 소유(또는 admin)만 조회된다. 없으면 접근 불가 → 404.
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, description")
+    .select("id, name, description, count_method")
     .eq("id", id)
     .maybeSingle();
   if (!project) notFound();
@@ -84,11 +84,6 @@ export default async function ProjectHomePage({
             desc="채점 기준·배점·가중치 편집"
           />
           <SetupCard
-            href={`/projects/${project.id}/students`}
-            title="학생 명단"
-            desc="학생 추가·수정, 교사 관찰 메모"
-          />
-          <SetupCard
             href={`/projects/${project.id}/profile`}
             title="프롬프트 프로필"
             desc="생기부 작성 참고·금지사항(계정 기본+오버라이드)"
@@ -142,6 +137,7 @@ export default async function ProjectHomePage({
         <WorksheetTable
           projectId={project.id}
           projectName={project.name}
+          countMethod={project.count_method}
           initialRows={worksheetRows}
           initialLayout={wsLayout.data?.layout ?? null}
         />

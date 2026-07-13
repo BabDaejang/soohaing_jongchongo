@@ -1,7 +1,6 @@
 // 작업결과표 레이아웃 — **순수 함수**. 클라이언트(편집·복원)와 서버(saveWorksheetLayout
 // 재검증, 신뢰 경계)가 동일 새니타이저를 쓴다. 저장된 jsonb는 사용자 입력에서 왔으므로
-// 항상 normalizeWorksheetLayout으로 클램프·검증한 뒤 사용한다.
-// (참조 구현: lib/records/layout.ts의 normalizeLayout — 구형 results shape도 방어한다.)
+// 항상 normalizeWorksheetLayout으로 클램프·검증한 뒤 사용한다(구형 results shape도 방어한다).
 
 import { WORKSHEET_COLUMNS, type WorksheetColumnKey, type WorksheetRow } from "./types";
 
