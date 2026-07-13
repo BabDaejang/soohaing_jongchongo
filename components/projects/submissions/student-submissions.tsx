@@ -11,7 +11,10 @@ import {
   toggleInclude,
   updateSubmissionText,
 } from "@/app/projects/[id]/submissions/actions";
+import { AuthenticityBadge } from "@/components/projects/authenticity-badge";
+import type { Finding } from "@/lib/factsheet/authenticity";
 import type {
+  AuthenticityStatus,
   IdentitySource,
   MatchMethod,
   SubmissionSourceType,
@@ -31,6 +34,20 @@ export type SubRow = {
   include_in_record: boolean;
   storage_path: string | null;
   extraction_approved_at: string | null;
+  authenticity_status: AuthenticityStatus;
+  authenticity: unknown; // { claim, urls, findings, factsheet_id, model, checked_at, content_hash }
+};
+
+// 진실성 리포트(authenticity jsonb)에서 findings·출처 요약을 안전하게 뽑는다.
+type AuthReport = { claim?: { title?: string | null }; findings?: Finding[] };
+function readAuthReport(raw: unknown): AuthReport {
+  return raw && typeof raw === "object" ? (raw as AuthReport) : {};
+}
+
+const VERDICT_LABEL: Record<Finding["verdict"], string> = {
+  supported: "부합",
+  contradicted: "모순",
+  not_found: "근거 없음",
 };
 
 const METHOD_LABEL: Record<MatchMethod, string> = {
@@ -194,7 +211,15 @@ function SubmissionRow({
   const [text, setText] = useState(row.content_text);
   const [evalOn, setEvalOn] = useState(row.include_in_eval);
   const [recordOn, setRecordOn] = useState(row.include_in_record);
+  const [showFindings, setShowFindings] = useState(false);
   const [error, setError] = useState("");
+
+  // 진실성 근거(의심·판정 불가만 펼침) — 조치는 기존 수단(반영 해제·재귀속·점수 보정)으로 교사가 결정.
+  const findings = readAuthReport(row.authenticity).findings ?? [];
+  const canExpandAuth =
+    (row.authenticity_status === "suspect" ||
+      row.authenticity_status === "unverifiable") &&
+    findings.length > 0;
 
   const act = (fn: () => Promise<void>, refresh = true) =>
     start(async () => {
@@ -226,7 +251,63 @@ function SubmissionRow({
           </span>
         )}
         {row.source_filename && <span>{row.source_filename}</span>}
+        {canExpandAuth ? (
+          <button
+            type="button"
+            onClick={() => setShowFindings((v) => !v)}
+            className="inline-flex items-center"
+          >
+            <AuthenticityBadge status={row.authenticity_status} />
+            <span className="ml-1 underline underline-offset-2">
+              {showFindings ? "근거 접기" : "근거 보기"}
+            </span>
+          </button>
+        ) : (
+          <AuthenticityBadge status={row.authenticity_status} />
+        )}
       </div>
+
+      {showFindings && canExpandAuth && (
+        <div className="mb-2 flex flex-col gap-2 rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/40">
+          {findings.map((f, i) => (
+            <div key={i} className="flex flex-col gap-0.5">
+              <div className="flex items-start gap-1.5">
+                <span
+                  className={`shrink-0 rounded px-1 py-0.5 font-medium ${
+                    f.verdict === "contradicted"
+                      ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
+                      : f.verdict === "supported"
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
+                        : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                  }`}
+                >
+                  {VERDICT_LABEL[f.verdict]}
+                </span>
+                <span className="text-zinc-700 dark:text-zinc-200">{f.claim}</span>
+              </div>
+              {f.quote && (
+                <p className="border-l-2 border-zinc-300 pl-2 text-zinc-500 dark:border-zinc-700">
+                  “{f.quote}”
+                </p>
+              )}
+              {f.url && (
+                <a
+                  href={f.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="w-fit text-zinc-500 underline underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"
+                >
+                  출처 원문 →
+                </a>
+              )}
+            </div>
+          ))}
+          <p className="text-zinc-400">
+            진실성 판정은 참고용 플래그입니다. 필요하면 평가 반영 해제·다른 학생으로 이동·점수
+            보정으로 교사가 조치하세요(자동 조치 없음).
+          </p>
+        </div>
+      )}
 
       {editing ? (
         <textarea

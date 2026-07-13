@@ -4,6 +4,8 @@ import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  prepareAuthenticity,
+  verifyAuthenticityOne,
   prepareEvaluation,
   evaluateOne,
   finalizeEvaluation,
@@ -23,15 +25,16 @@ function fmt(n: number): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/\.?0+$/, "");
 }
 
-// 페이즈 2 · 평가 (리팩토링 2 배치 7). 구 /evaluate 화면의 실행 패널·등급제 토글·등급 분포
-// 요약·override 안내를 대시보드로 이식했다. 학생별 점수 표는 작업결과표가 대체한다.
-// 채점 1건마다 작업결과표를 갱신하되, 확정 표시 점수는 finalize의 재계산 후 나온다
-// (채점 중에는 확정 표시 점수가 없다 — 배치 2 설계).
+// 페이즈 2 · 평가 (리팩토링 2 배치 7·10). 실행은 2스테이지 연쇄다:
+//   스테이지 A = 진실성 검증(채점 앞) → nextStage → 스테이지 B = 채점(기존).
+// 진실성은 채점 프롬프트·감점 로직에 섞지 않는다(의심이어도 채점 진행 — 플래그만, 배치 10).
+// 채점 1건마다 작업결과표를 갱신하되, 확정 표시 점수는 finalize의 재계산 후 나온다(배치 2 설계).
 export function Phase2Panel({
   projectId,
   needsRecalc,
   matchedIncluded,
   scoredSubmissions,
+  suspectCount,
   providerName,
   model,
   criteriaCount,
@@ -43,6 +46,7 @@ export function Phase2Panel({
   needsRecalc: boolean;
   matchedIncluded: number; // 채점 대상 제출물 수(반영+매칭)
   scoredSubmissions: number; // 현재 평가가 있는 제출물 수
+  suspectCount: number; // 진실성 '의심' 제출물 수(플래그만)
   providerName: string;
   model: string;
   criteriaCount: number;
@@ -57,11 +61,56 @@ export function Phase2Panel({
   const [scheme, setScheme] = useState<GradingScheme>(gradingScheme);
   const [, startScheme] = useTransition();
 
-  // prepare가 산출한 증분 보존 건수와 대표 실패 사유를 finalize까지 전달한다.
+  // 스테이지 A(진실성) — 증분 보존 건수 + 판정 집계를 finalize까지 ref로 전달한다.
+  const authSkippedRef = useRef(0);
+  const authTallyRef = useRef({
+    verified: 0,
+    suspect: 0,
+    unverifiable: 0,
+    not_applicable: 0,
+  });
+
+  const authPrepare = useCallback(async () => {
+    const { targets, skipped } = await prepareAuthenticity(projectId);
+    authSkippedRef.current = skipped;
+    authTallyRef.current = {
+      verified: 0,
+      suspect: 0,
+      unverifiable: 0,
+      not_applicable: 0,
+    };
+    return {
+      targets,
+      prelude: [
+        {
+          level: "info" as const,
+          text: `진실성 검증 대상 ${targets.length}건 · 증분 보존 ${skipped}건`,
+        },
+      ],
+    };
+  }, [projectId]);
+
+  const authStepOne = useCallback(
+    async (t: SequentialTarget) => {
+      const r = await verifyAuthenticityOne(projectId, t.id);
+      const s = r.status;
+      if (r.ok && s && s !== "unverified") authTallyRef.current[s] += 1;
+      emitWorksheetRefresh(); // 1건마다 작업결과표 갱신(제출물 배지 반영)
+      return { ok: r.ok, message: r.message };
+    },
+    [projectId],
+  );
+
+  const authFinalize = useCallback(async () => {
+    const t = authTallyRef.current;
+    return `진실성 요약 — 확인 ${t.verified}·의심 ${t.suspect}·판정 불가 ${t.unverifiable}·해당 없음 ${t.not_applicable}·증분 보존 ${authSkippedRef.current}`;
+  }, []);
+
+  // 스테이지 B(채점) — prepare가 산출한 증분 보존 건수와 대표 실패 사유를 finalize까지 전달.
   const skippedRef = useRef(0);
   const sampleFailureRef = useRef<string | null>(null);
 
-  const prepare = useCallback(async () => {
+  const evalPrepare = useCallback(async () => {
     const { targets, skipped } = await prepareEvaluation(projectId);
     skippedRef.current = skipped;
     sampleFailureRef.current = null;
@@ -76,7 +125,7 @@ export function Phase2Panel({
     };
   }, [projectId]);
 
-  const stepOne = useCallback(
+  const evalStepOne = useCallback(
     async (t: SequentialTarget) => {
       const r = await evaluateOne(projectId, t.id);
       if (!r.ok && !sampleFailureRef.current) sampleFailureRef.current = r.message;
@@ -86,7 +135,7 @@ export function Phase2Panel({
     [projectId],
   );
 
-  const finalize = useCallback(
+  const evalFinalize = useCallback(
     async ({
       succeeded,
       failed,
@@ -112,8 +161,19 @@ export function Phase2Panel({
     [projectId, router],
   );
 
+  // 진실성(A) 정상 종료 후 채점(B)을 이어 실행한다(배치 6 nextStage 연쇄, 1회).
+  const nextStage = useCallback(
+    () => ({ prepare: evalPrepare, stepOne: evalStepOne, finalize: evalFinalize }),
+    [evalPrepare, evalStepOne, evalFinalize],
+  );
+
   const { lines, runState, progress, start, pause, resume, stop } =
-    useSequentialRun({ prepare, stepOne, finalize });
+    useSequentialRun({
+      prepare: authPrepare,
+      stepOne: authStepOne,
+      finalize: authFinalize,
+      nextStage,
+    });
 
   const running =
     runState === "running" || runState === "paused" || runState === "stopping";
@@ -185,7 +245,7 @@ export function Phase2Panel({
             disabled={running || recalcPending}
             className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
           >
-            {running ? "채점 중…" : "채점 실행"}
+            {running ? "실행 중…" : "채점 실행"}
           </button>
           <button
             type="button"
@@ -208,14 +268,33 @@ export function Phase2Panel({
           </Link>
         </div>
 
+        {suspectCount > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-full bg-red-100 px-2.5 py-1 font-medium text-red-700 dark:bg-red-950 dark:text-red-400">
+              ⚠ 진실성 의심 {suspectCount}건
+            </span>
+            <Link
+              href={`/projects/${projectId}/submissions`}
+              className="text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
+            >
+              제출물 상세에서 근거 보기 →
+            </Link>
+            <span className="text-zinc-400">
+              의심은 플래그일 뿐 — 채점은 진행됩니다(자동 감점·제외 없음).
+            </span>
+          </div>
+        )}
+
         <p className="text-xs text-zinc-500">
-          채점 대상(반영 체크 + 매칭 확정) 제출물 {matchedIncluded}건 중{" "}
+          [채점 실행]은 <b>진실성 검증 → 채점</b> 순으로 진행됩니다. 진실성 검증은 인용 출처를
+          식별해 도서팩트시트·인용 URL 원문과 대조하며(의심이어도 채점은 진행), 이어서 채점
+          스테이지가 실행됩니다. 채점 대상(반영 체크 + 매칭 확정) 제출물 {matchedIncluded}건 중{" "}
           {scoredSubmissions}건 채점됨
-          {pendingCount > 0 && ` · 미채점 ${pendingCount}건`}. 채점은 건별로 실행되며 진행 중
-          일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다. temperature를 지원하는
-          모델은 0으로 고정하며(gpt-5 계열 미지원), 내용이 바뀌지 않은 제출물은 재채점하지
-          않습니다(증분). 표시 점수는 초기 확정 인원(15~25명) 채점 후 999점 만점으로
-          확정됩니다.
+          {pendingCount > 0 && ` · 미채점 ${pendingCount}건`}. 두 스테이지 모두 건별로 실행되며
+          진행 중 일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다. temperature를
+          지원하는 모델은 0으로 고정하며(gpt-5 계열 미지원), 내용이 바뀌지 않은 제출물은
+          재검증·재채점하지 않습니다(증분). 표시 점수는 초기 확정 인원(15~25명) 채점 후 999점
+          만점으로 확정됩니다.
         </p>
       </div>
 

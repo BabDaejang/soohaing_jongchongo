@@ -17,6 +17,7 @@ import {
   saveTeacherMemo,
 } from "@/app/projects/[id]/students/actions";
 import { countText } from "@/lib/text-count";
+import { AuthenticityBadge } from "@/components/projects/authenticity-badge";
 import type { CountMethod } from "@/lib/supabase/types";
 import {
   WORKSHEET_COLUMNS,
@@ -702,8 +703,9 @@ function WorksheetRowView({
             ) : (
               <ul className="flex flex-col gap-0.5">
                 {row.submissions.map((s) => (
-                  <li key={s.id} className="truncate" title={s.id}>
-                    · {s.title}
+                  <li key={s.id} className="flex items-center" title={s.id}>
+                    <span className="truncate">· {s.title}</span>
+                    <AuthenticityBadge status={s.authenticityStatus} />
                   </li>
                 ))}
               </ul>

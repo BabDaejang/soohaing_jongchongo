@@ -5,7 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireProjectOwner } from "@/lib/projects";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { callLLM } from "@/lib/llm";
-import type { ModelRouting } from "@/lib/llm";
+import type { ModelRouting, ModelTarget } from "@/lib/llm";
 import { writeAuditLog } from "@/lib/audit";
 import {
   aggregateComposite,
@@ -14,7 +14,23 @@ import {
 } from "@/lib/scoring";
 import { computeStandings } from "@/lib/grading";
 import { assignDisplayScores, initialConfirmCount } from "@/lib/scores/display";
+import { searchBooks, hasAladinKey } from "@/lib/factsheet/aladin";
+import { hasNaverKeys } from "@/lib/factsheet/naver";
+import { fetchPageText } from "@/lib/factsheet/fetch-page";
+import { planCollection, collectOneSource } from "@/lib/factsheet/build";
+import {
+  buildComparePrompt,
+  buildIdentifyPrompt,
+  extractUrls,
+  parseFindings,
+  parseSourceClaim,
+  summarizeVerdict,
+  type Finding,
+  type SourceClaim,
+} from "@/lib/factsheet/authenticity";
+import { createFactsheetFromBook } from "@/app/factsheets/actions";
 import type {
+  AuthenticityStatus,
   Database,
   EvaluationCriterionScore,
   GradingScheme,
@@ -455,6 +471,396 @@ export async function finalizeEvaluation(
 
   revalidatePath(`/projects/${projectId}`);
   return result;
+}
+
+// ── 진실성 검증 — 채점 앞 스테이지(식별→팩트시트 확보/자동 생성→대조→플래그) ──
+// 리팩토링 2 배치 10. 의심이어도 채점은 진행한다(플래그만 — 자동 감점·제외 없음).
+// authenticity_status·authenticity·factsheet_id는 채점처럼 서버(service role)가 채운다.
+const AUTH_ENRICH_THRESHOLD = 5; // 내 소유 팩트시트가 이보다 부실하면 대조 전 자동 보강 1회
+const AUTH_COLLECT_MAX = 6; // 진실성 검증 중 자동 수집하는 문서 상한(시간 방어)
+const AUTH_URL_FETCH_MAX = 3; // 대조에 쓰는 인용 URL 원문 수 상한
+const AUTH_ENTRY_MAX = 40; // 증거로 넣는 팩트시트 entry 상한
+const AUTH_ENTRY_TEXT_MAX = 800; // entry 증거 절단
+const AUTH_URL_TEXT_MAX = 6000; // URL 원문 증거 절단
+const AUTH_META_TEXT_MAX = 3500; // 팩트시트 메타 증거 절단
+
+// 검증 대상·라벨과 증분 보존 건수를 조립한다(LLM 없음). 채점 대상 조건과 동일한 제출물 중,
+// 미검증이거나 검증 당시 content_hash가 현재와 다른 것(증분).
+export async function prepareAuthenticity(
+  projectId: string,
+): Promise<{ targets: EvalTarget[]; skipped: number }> {
+  const { supabase } = await requireProjectOwner(projectId);
+
+  const { data: subs } = await supabase
+    .from("submissions")
+    .select(
+      "id, student_id, source_filename, content_hash, authenticity_status, authenticity",
+    )
+    .eq("project_id", projectId)
+    .eq("include_in_eval", true)
+    .not("student_id", "is", null)
+    .in("match_status", MATCHED_STATUSES);
+  const rows = subs ?? [];
+
+  const { data: students } = await supabase
+    .from("students")
+    .select("id, student_number, name")
+    .eq("project_id", projectId);
+  const studentById = new Map((students ?? []).map((s) => [s.id, s]));
+
+  const targets: EvalTarget[] = [];
+  let skipped = 0;
+  for (const r of rows) {
+    const prev = (r.authenticity ?? null) as { content_hash?: string } | null;
+    const upToDate =
+      r.authenticity_status !== "unverified" &&
+      prev?.content_hash === r.content_hash;
+    if (upToDate) {
+      skipped += 1; // 증분: 내용 불변 + 이미 검증 → 재검증 안 함
+      continue;
+    }
+    const st = r.student_id ? studentById.get(r.student_id) : undefined;
+    const who = st ? `${st.student_number ?? "?"} ${st.name}`.trim() : "(미상)";
+    const label = r.source_filename ? `${who} · ${r.source_filename}` : who;
+    targets.push({ id: r.id, label });
+  }
+  return { targets, skipped };
+}
+
+// 제목·저자 느슨 매칭(공백 제거·대소문자 무시·부분 포함). LLM claim엔 isbn13이 없어 제목으로 찾는다.
+function normLoose(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, "");
+}
+function pickBookMatch(
+  rows: { id: string; title: string; author: string | null }[],
+  claim: SourceClaim,
+): string | null {
+  const t = normLoose(claim.title ?? "");
+  if (!t) return null;
+  const titleMatches = rows.filter((r) => {
+    const rt = normLoose(r.title);
+    return rt === t || rt.includes(t) || t.includes(rt);
+  });
+  if (titleMatches.length === 0) return null;
+  if (claim.author) {
+    const a = normLoose(claim.author);
+    const withAuthor = titleMatches.find(
+      (r) => r.author && (normLoose(r.author).includes(a) || a.includes(normLoose(r.author))),
+    );
+    if (withAuthor) return withAuthor.id;
+  }
+  return titleMatches[0].id;
+}
+
+// 도서 팩트시트 확보: ① 내 소유 → ② shared(재사용) → ③ 검색·자동 생성(private).
+// shared는 그대로 대조(보강하지 않음 — fork 강제는 과함). 검색 키 없으면 확보 실패.
+async function acquireFactsheet(
+  userId: string,
+  supabase: Client,
+  claim: SourceClaim,
+): Promise<{ factsheetId: string | null; isMine: boolean; note: string }> {
+  // ① 내 소유
+  const { data: mine } = await supabase
+    .from("factsheets")
+    .select("id, title, author")
+    .eq("owner_id", userId);
+  const mineHit = pickBookMatch(mine ?? [], claim);
+  if (mineHit) return { factsheetId: mineHit, isMine: true, note: "" };
+
+  // ② shared 재사용(토큰 0 — 다른 학생이 만든 것을 그대로 대조)
+  const { data: sharedRows } = await supabase
+    .from("factsheets")
+    .select("id, title, author")
+    .eq("share_status", "shared");
+  const sharedHit = pickBookMatch(sharedRows ?? [], claim);
+  if (sharedHit) return { factsheetId: sharedHit, isMine: false, note: "공유 재사용" };
+
+  // ③ 검색 → 최상위 후보 isbn → 자동 생성(내 계정, private)
+  if (!hasAladinKey()) return { factsheetId: null, isMine: false, note: "검색 키 미설정" };
+  let isbn: string | null = null;
+  try {
+    const query = claim.author ? `${claim.title} ${claim.author}` : (claim.title ?? "");
+    const candidates = await searchBooks(query);
+    isbn = candidates.find((c) => c.isbn13)?.isbn13 ?? null;
+  } catch {
+    isbn = null;
+  }
+  if (!isbn) return { factsheetId: null, isMine: false, note: "도서 검색 실패" };
+  try {
+    const created = await createFactsheetFromBook(isbn);
+    return { factsheetId: created.id, isMine: true, note: "자동생성" };
+  } catch (e) {
+    return {
+      factsheetId: null,
+      isMine: false,
+      note: (e instanceof Error ? e.message : "팩트시트 생성 실패").slice(0, 80),
+    };
+  }
+}
+
+// 내 소유 팩트시트를 자동 수집으로 보강한다(무할루시네이션: collectOneSource가 스니펫 대조 통과분만 저장).
+async function autoCollectFactsheet(
+  userId: string,
+  supabase: Client,
+  factsheetId: string,
+  book: { title: string; author: string | null },
+  extractTarget: ModelTarget,
+): Promise<number> {
+  if (!hasNaverKeys()) return 0;
+  const { data: entries } = await supabase
+    .from("factsheet_entries")
+    .select("source_url")
+    .eq("factsheet_id", factsheetId);
+  const excludeUrls = (entries ?? [])
+    .map((e) => e.source_url)
+    .filter((u): u is string => !!u);
+  let targets;
+  try {
+    targets = await planCollection(book, excludeUrls);
+  } catch {
+    return 0;
+  }
+  let added = 0;
+  for (const target of targets.slice(0, AUTH_COLLECT_MAX)) {
+    const r = await collectOneSource(userId, factsheetId, target, extractTarget);
+    added += r.added;
+  }
+  return added;
+}
+
+// 제출물 1건 진실성 검증(터미널이 반복 호출). throw 금지 — {ok, message, status}로 돌려준다.
+// 클라이언트 입력은 id뿐 — 내용·라우팅·명단은 서버가 DB에서 재조립한다(INV-2).
+export async function verifyAuthenticityOne(
+  projectId: string,
+  submissionId: string,
+): Promise<{ ok: boolean; message: string; status?: AuthenticityStatus }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  // 1. 소속·자격 + 증분 재확인
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select(
+      "id, content_text, content_hash, include_in_eval, student_id, match_status, authenticity_status, authenticity",
+    )
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (
+    !sub ||
+    !sub.include_in_eval ||
+    !sub.student_id ||
+    !MATCHED_STATUSES.includes(sub.match_status)
+  ) {
+    return { ok: false, message: "검증 대상이 아닌 제출물입니다." };
+  }
+  const prev = (sub.authenticity ?? null) as { content_hash?: string } | null;
+  if (sub.authenticity_status !== "unverified" && prev?.content_hash === sub.content_hash) {
+    return { ok: true, message: "이미 검증됨(증분)", status: sub.authenticity_status };
+  }
+
+  const { data: project } = await supabase
+    .from("projects")
+    .select("model_routing")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (!project) return { ok: false, message: "프로젝트를 찾을 수 없습니다." };
+  const routing: ModelRouting = project.model_routing;
+
+  const content = sub.content_text ?? "";
+  const checkedAt = new Date().toISOString();
+
+  // 2. 식별: 정규식 URL + LLM SourceClaim
+  const urls = extractUrls(content);
+  let claim: SourceClaim;
+  try {
+    const res = await callLLM({
+      userId,
+      purpose: "추출",
+      modelRouting: routing,
+      temperature: 0,
+      messages: [{ role: "user", content: buildIdentifyPrompt(content) }],
+    });
+    claim = parseSourceClaim(res.text);
+  } catch (e) {
+    return {
+      ok: false,
+      message: (e instanceof Error ? e.message : "출처 식별 실패").slice(0, 300),
+    };
+  }
+
+  // 출처 인용이 전혀 없으면 not_applicable.
+  if (claim.kind === "none" && urls.length === 0) {
+    const save = await saveAuthenticity(admin, submissionId, projectId, "not_applicable", {
+      claim,
+      urls: [],
+      findings: [],
+      factsheet_id: null,
+      model: null,
+      checked_at: checkedAt,
+      content_hash: sub.content_hash,
+    }, null);
+    if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
+    return { ok: true, message: "출처 인용 없음", status: "not_applicable" };
+  }
+
+  // 3. 도서: 팩트시트 확보(내 소유 → shared → 자동 생성) + 부실하면 보강 1회
+  let factsheetId: string | null = null;
+  let fsNote = "";
+  if (claim.kind === "book" && claim.title) {
+    const acq = await acquireFactsheet(userId, supabase, claim);
+    factsheetId = acq.factsheetId;
+    fsNote = acq.note;
+    if (factsheetId && acq.isMine && hasNaverKeys()) {
+      const { count } = await supabase
+        .from("factsheet_entries")
+        .select("id", { count: "exact", head: true })
+        .eq("factsheet_id", factsheetId);
+      if ((count ?? 0) < AUTH_ENRICH_THRESHOLD) {
+        const added = await autoCollectFactsheet(
+          userId,
+          supabase,
+          factsheetId,
+          { title: claim.title, author: claim.author },
+          routing.extract,
+        );
+        if (added > 0) fsNote = `${fsNote || "보강"}·entry ${added}`;
+      }
+    }
+  }
+
+  // 4~5. 증거 조립: 팩트시트 entries + 메타 + 인용 URL 원문
+  const evidence: { id: string; label: string; text: string }[] = [];
+  if (factsheetId) {
+    const { data: fs } = await supabase
+      .from("factsheets")
+      .select("toc, intro")
+      .eq("id", factsheetId)
+      .maybeSingle();
+    if (fs && (fs.toc || fs.intro)) {
+      const metaText = [
+        fs.toc ? `목차:\n${fs.toc}` : "",
+        fs.intro ? `소개:\n${fs.intro}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n\n")
+        .slice(0, AUTH_META_TEXT_MAX);
+      evidence.push({ id: "meta", label: "도서 메타(목차·소개)", text: metaText });
+    }
+    const { data: entries } = await supabase
+      .from("factsheet_entries")
+      .select("id, chapter_label, content")
+      .eq("factsheet_id", factsheetId)
+      .limit(AUTH_ENTRY_MAX);
+    for (const e of entries ?? []) {
+      evidence.push({
+        id: e.id,
+        label: e.chapter_label,
+        text: e.content.slice(0, AUTH_ENTRY_TEXT_MAX),
+      });
+    }
+  }
+  for (const url of urls.slice(0, AUTH_URL_FETCH_MAX)) {
+    try {
+      const text = await fetchPageText(url);
+      if (text.trim()) {
+        evidence.push({ id: url, label: "인용 URL", text: text.slice(0, AUTH_URL_TEXT_MAX) });
+      }
+    } catch {
+      // 그 URL만 제외(로그는 message에 남지 않음 — 스텝 단위 결과만 노출)
+    }
+  }
+
+  const head = claim.kind === "book" && claim.title
+    ? `『${claim.title}』`
+    : urls.length > 0
+      ? "URL 인용"
+      : "출처";
+  const hint = fsNote ? ` [${fsNote}]` : "";
+
+  // 증거가 하나도 없으면 LLM 없이 판정 불가.
+  if (evidence.length === 0) {
+    const save = await saveAuthenticity(admin, submissionId, projectId, "unverifiable", {
+      claim,
+      urls,
+      findings: [],
+      factsheet_id: factsheetId,
+      model: null,
+      checked_at: checkedAt,
+      content_hash: sub.content_hash,
+    }, factsheetId);
+    if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
+    return {
+      ok: true,
+      message: `${head}${hint} — 판정 불가(근거 확보 실패)`,
+      status: "unverifiable",
+    };
+  }
+
+  // 대조: 제출물이 출처에 대해 주장하는 내용을 뽑아 각 주장을 증거와 맞춘다.
+  let findings: Finding[];
+  let model: string;
+  try {
+    const res = await callLLM({
+      userId,
+      purpose: "검증",
+      modelRouting: routing,
+      temperature: 0,
+      messages: [{ role: "user", content: buildComparePrompt(content, evidence) }],
+    });
+    findings = parseFindings(res.text, new Set(evidence.map((e) => e.id)));
+    model = res.model;
+  } catch (e) {
+    return {
+      ok: false,
+      message: (e instanceof Error ? e.message : "대조 호출 실패").slice(0, 300),
+    };
+  }
+
+  const status = summarizeVerdict(findings);
+  const supported = findings.filter((f) => f.verdict === "supported").length;
+  const contradicted = findings.filter((f) => f.verdict === "contradicted").length;
+
+  const save = await saveAuthenticity(admin, submissionId, projectId, status, {
+    claim,
+    urls,
+    findings,
+    factsheet_id: factsheetId,
+    model,
+    checked_at: checkedAt,
+    content_hash: sub.content_hash,
+  }, factsheetId);
+  if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
+
+  const verdictMsg =
+    status === "verified"
+      ? `확인(근거 ${supported})`
+      : status === "suspect"
+        ? `의심(모순 ${contradicted}건)`
+        : "판정 불가(근거 부족)";
+  return { ok: true, message: `${head}${hint} — ${verdictMsg}`, status };
+}
+
+// 진실성 상태·근거를 service role로 저장(채점처럼 — 소유자 update 정책 불변, needs_recalc 무관).
+async function saveAuthenticity(
+  admin: Admin,
+  submissionId: string,
+  projectId: string,
+  status: AuthenticityStatus,
+  authenticity: Record<string, unknown>,
+  factsheetId: string | null,
+): Promise<{ ok: boolean; message?: string }> {
+  const { error } = await admin
+    .from("submissions")
+    .update({
+      authenticity_status: status,
+      authenticity,
+      factsheet_id: factsheetId,
+    })
+    .eq("id", submissionId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, message: error.message };
+  return { ok: true };
 }
 
 // ── 재계산만(재채점 없이 합성·표시 점수·순위·등급) ──────────────────────

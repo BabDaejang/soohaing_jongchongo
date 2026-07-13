@@ -58,6 +58,7 @@ export default async function ProjectHomePage({
     rubricRes,
     matchedRes,
     evalRes,
+    suspectRes,
   ] = await Promise.all([
     supabase
       .from("students")
@@ -65,7 +66,7 @@ export default async function ProjectHomePage({
       .eq("project_id", id),
     supabase
       .from("submissions")
-      .select("id, student_id, source_filename, submission_key")
+      .select("id, student_id, source_filename, submission_key, authenticity_status")
       .eq("project_id", id)
       .not("student_id", "is", null),
     supabase
@@ -103,6 +104,11 @@ export default async function ProjectHomePage({
       .select("id", { count: "exact", head: true })
       .eq("project_id", id)
       .eq("is_current", true),
+    supabase
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", id)
+      .eq("authenticity_status", "suspect"),
   ]);
 
   const worksheetRows = assembleWorksheetRows({
@@ -118,6 +124,7 @@ export default async function ProjectHomePage({
   const criteria = (rubricRes.data?.criteria ?? []) as RubricCriterion[];
   const matchedIncluded = matchedRes.count ?? 0;
   const scoredSubmissions = evalRes.count ?? 0;
+  const suspectCount = suspectRes.count ?? 0;
   const effectiveScores = (wsScores.data ?? []).map((s) =>
     Number(s.effective_score),
   );
@@ -245,6 +252,7 @@ export default async function ProjectHomePage({
           needsRecalc={project.needs_recalc}
           matchedIncluded={matchedIncluded}
           scoredSubmissions={scoredSubmissions}
+          suspectCount={suspectCount}
           providerName={evalProviderName}
           model={evalModel}
           criteriaCount={criteria.length}

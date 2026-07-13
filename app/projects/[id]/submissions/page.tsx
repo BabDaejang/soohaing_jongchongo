@@ -32,7 +32,7 @@ export default async function SubmissionsPage({
     supabase
       .from("submissions")
       .select(
-        "id, student_id, source_filename, source_type, content_text, match_status, match_method, identity_source, match_candidates, pending_content, include_in_eval, include_in_record, storage_path, extraction_approved_at, raw_student_no, raw_student_name, created_at",
+        "id, student_id, source_filename, source_type, content_text, match_status, match_method, identity_source, match_candidates, pending_content, include_in_eval, include_in_record, storage_path, extraction_approved_at, authenticity_status, authenticity, raw_student_no, raw_student_name, created_at",
       )
       .eq("project_id", id)
       .order("created_at", { ascending: true }),
@@ -68,6 +68,8 @@ export default async function SubmissionsPage({
       include_in_record: s.include_in_record,
       storage_path: s.storage_path,
       extraction_approved_at: s.extraction_approved_at,
+      authenticity_status: s.authenticity_status,
+      authenticity: s.authenticity,
     }));
 
   return (
