@@ -168,6 +168,52 @@ export async function generateRecord(
   return { version, unsupported, sentences: verification.length };
 }
 
+// ── 일괄 생성 대상 조립 (대시보드 페이즈 3 터미널이 학생별 generateRecord를 순차 호출) ──
+// INV-1: 서버는 대상 목록만 돌려주고, 학생 1명=호출 1회는 클라이언트 루프가 보장한다.
+// 대상 = 반영(include_in_record)·매칭 확정 제출물이 1건 이상이거나 교사 메모가 있는 학생.
+export type RecordRunTarget = { id: string; label: string }; // label = "학번 이름"
+
+export async function prepareRecordRun(
+  projectId: string,
+): Promise<{ targets: RecordRunTarget[] }> {
+  const { supabase } = await requireProjectOwner(projectId);
+
+  const [studentsRes, subsRes] = await Promise.all([
+    supabase
+      .from("students")
+      .select("id, student_number, name, teacher_memo")
+      .eq("project_id", projectId)
+      .order("student_number", { nullsFirst: false })
+      .order("name"),
+    supabase
+      .from("submissions")
+      .select("student_id")
+      .eq("project_id", projectId)
+      .eq("include_in_record", true)
+      .not("student_id", "is", null)
+      .in("match_status", ["auto_matched", "confirmed"]),
+  ]);
+
+  const reflectCount = new Map<string, number>();
+  for (const s of subsRes.data ?? []) {
+    if (!s.student_id) continue;
+    reflectCount.set(s.student_id, (reflectCount.get(s.student_id) ?? 0) + 1);
+  }
+
+  const targets: RecordRunTarget[] = [];
+  for (const st of studentsRes.data ?? []) {
+    const hasReflect = (reflectCount.get(st.id) ?? 0) > 0;
+    const hasMemo = !!st.teacher_memo?.trim();
+    if (!hasReflect && !hasMemo) continue;
+    targets.push({
+      id: st.id,
+      label: `${st.student_number ?? "?"} ${st.name}`.trim(),
+    });
+  }
+
+  return { targets };
+}
+
 // ── 교사 편집 저장 (삭제·직접 수정 → 새 'edited' 버전, 재검증 보류) ──────
 export async function saveRecordEdit(
   projectId: string,

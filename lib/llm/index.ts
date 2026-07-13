@@ -8,6 +8,7 @@ import {
   type LLMMessage,
   type LLMResult,
   type ModelRouting,
+  type ModelTarget,
   type Purpose,
 } from "./types";
 import { routingKeyForPurpose } from "./routing";
@@ -40,6 +41,9 @@ export type CallLLMParams = {
   messages: LLMMessage[];
   // purpose → {provider_id, model} 라우팅. 세션 4의 프로젝트 model_routing에서 조립해 전달한다.
   modelRouting: ModelRouting;
+  // 있으면 modelRouting[key] 대신 이 target을 쓴다(키 해석·어댑터 경로는 동일). 루브릭 전담
+  // 모델 폴백(rubric ?? default ?? evaluate) 등 라우팅 밖 선택에 사용한다(배치 7). 기존 호출부 무영향.
+  overrideTarget?: ModelTarget;
   maxTokens?: number;
   temperature?: number;
 };
@@ -50,11 +54,12 @@ export async function callLLM({
   purpose,
   messages,
   modelRouting,
+  overrideTarget,
   maxTokens,
   temperature,
 }: CallLLMParams): Promise<LLMResult> {
   const key = routingKeyForPurpose(purpose);
-  const target = modelRouting[key];
+  const target = overrideTarget ?? modelRouting[key];
   if (!target) {
     throw new Error(`모델 라우팅에 '${key}' 설정이 없습니다.`);
   }

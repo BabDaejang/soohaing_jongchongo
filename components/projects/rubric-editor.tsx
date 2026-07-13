@@ -3,6 +3,10 @@
 import { useState } from "react";
 import { useFormStatus } from "react-dom";
 import { saveRubric } from "@/app/projects/[id]/rubric/actions";
+import {
+  formatDownloadStamp,
+  sanitizeFilename,
+} from "@/lib/worksheet/download";
 import type { RubricCriterion } from "@/lib/supabase/types";
 
 function newCriterion(): RubricCriterion {
@@ -20,9 +24,11 @@ const inputClass =
 
 export function RubricEditor({
   projectId,
+  projectName,
   initialCriteria,
 }: {
   projectId: string;
+  projectName: string;
   initialCriteria: RubricCriterion[];
 }) {
   const [criteria, setCriteria] = useState<RubricCriterion[]>(
@@ -38,6 +44,25 @@ export function RubricEditor({
     setCriteria((prev) => prev.filter((c) => c.id !== id));
 
   const add = () => setCriteria((prev) => [...prev, newCriterion()]);
+
+  // 현재 편집 중인 기준을 4열 xlsx로 내보낸다(배치 3 download 패턴 재사용, SheetJS 동적 import).
+  async function downloadXlsx() {
+    const aoa: (string | number)[][] = [
+      ["기준", "설명", "배점", "가중치"],
+      ...criteria.map((c): (string | number)[] => [
+        c.name,
+        c.description,
+        c.max_score,
+        c.weight,
+      ]),
+    ];
+    const XLSX = await import("xlsx");
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "루브릭");
+    const stamp = formatDownloadStamp(new Date());
+    XLSX.writeFile(wb, `${sanitizeFilename(projectName)}-루브릭-${stamp}.xlsx`);
+  }
 
   return (
     <form action={saveRubric} className="flex flex-col gap-4">
@@ -120,13 +145,22 @@ export function RubricEditor({
       </ul>
 
       <div className="flex items-center justify-between">
-        <button
-          type="button"
-          onClick={add}
-          className="self-start rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-        >
-          + 기준 추가
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={add}
+            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            + 기준 추가
+          </button>
+          <button
+            type="button"
+            onClick={() => void downloadXlsx()}
+            className="rounded-md border border-zinc-300 px-3 py-1.5 text-sm text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          >
+            xlsx 다운로드
+          </button>
+        </div>
         <SaveButton />
       </div>
     </form>

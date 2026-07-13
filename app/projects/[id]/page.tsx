@@ -7,10 +7,12 @@ import { WorksheetTable } from "@/components/projects/worksheet/worksheet-table"
 import { PhaseSection } from "@/components/projects/dashboard/phase-section";
 import { DefaultModelPicker } from "@/components/projects/dashboard/default-model-picker";
 import { Phase1Panel } from "@/components/projects/dashboard/phase1-panel";
+import { Phase2Panel } from "@/components/projects/dashboard/phase2-panel";
+import { Phase3Panel } from "@/components/projects/dashboard/phase3-panel";
 import { listUploadedFiles } from "@/app/projects/[id]/ingest/actions";
 import { PersonalKeys } from "@/components/account/personal-keys";
 import type { ModelRouting } from "@/lib/llm/types";
-import type { KeyStatus, Provider } from "@/lib/supabase/types";
+import type { KeyStatus, Provider, RubricCriterion } from "@/lib/supabase/types";
 
 // 프로젝트 대시보드 — 페이즈 0(준비)→1(수합)→2(평가)→3(생기부)이 수직으로 이어지는 단일
 // 작업 화면 + 하단 작업결과표 (리팩토링 2 배치 5, SPEC 4~8절). 페이즈 1~3 실행 UI는 배치 6·7.
@@ -31,7 +33,9 @@ export default async function ProjectHomePage({
   // RLS로 본인 소유(또는 admin)만 조회된다. 없으면 접근 불가 → 404.
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, description, count_method, model_routing")
+    .select(
+      "id, name, description, count_method, model_routing, needs_recalc, grading_scheme, tie_break",
+    )
     .eq("id", id)
     .maybeSingle();
   if (!project || !user) notFound();
@@ -51,6 +55,9 @@ export default async function ProjectHomePage({
     providersRes,
     keysRes,
     uploadedFiles,
+    rubricRes,
+    matchedRes,
+    evalRes,
   ] = await Promise.all([
     supabase
       .from("students")
@@ -63,7 +70,7 @@ export default async function ProjectHomePage({
       .not("student_id", "is", null),
     supabase
       .from("student_scores")
-      .select("student_id, display_score, grade")
+      .select("student_id, display_score, grade, effective_score")
       .eq("project_id", id),
     supabase
       .from("records")
@@ -83,6 +90,19 @@ export default async function ProjectHomePage({
       .select("provider_id, key_last4, models, models_synced_at")
       .eq("owner_id", user.id),
     listUploadedFiles(id),
+    supabase.from("rubrics").select("criteria").eq("project_id", id).maybeSingle(),
+    supabase
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", id)
+      .eq("include_in_eval", true)
+      .not("student_id", "is", null)
+      .in("match_status", ["auto_matched", "confirmed"]),
+    supabase
+      .from("evaluations")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", id)
+      .eq("is_current", true),
   ]);
 
   const worksheetRows = assembleWorksheetRows({
@@ -93,6 +113,22 @@ export default async function ProjectHomePage({
   });
 
   const pendingCount = pendingRes.count ?? 0;
+
+  // 페이즈 2 데이터: 루브릭 기준 개수·채점 대상/완료 수·확정 반영 점수(등급 분포용).
+  const criteria = (rubricRes.data?.criteria ?? []) as RubricCriterion[];
+  const matchedIncluded = matchedRes.count ?? 0;
+  const scoredSubmissions = evalRes.count ?? 0;
+  const effectiveScores = (wsScores.data ?? []).map((s) =>
+    Number(s.effective_score),
+  );
+  // 평가 모델 배지: 라우팅의 evaluate 대상 + 프로바이더명.
+  const evalTarget = routing.evaluate;
+  const providerNameById = new Map(
+    (providersRes.data ?? []).map((p) => [p.id, p.name]),
+  );
+  const evalProviderName =
+    providerNameById.get(evalTarget?.provider_id ?? "") ?? "알 수 없음";
+  const evalModel = evalTarget?.model ?? "미설정";
 
   // 페이즈 0 키 상태: keySource != null인 프로바이더가 있으면 "키 있음".
   const withKey = routable.filter((p) => p.keySource !== null);
@@ -197,46 +233,39 @@ export default async function ProjectHomePage({
         />
       </PhaseSection>
 
-      {/* 페이즈 2 · 평가 (골격 — 실행 UI 이식은 배치 7) */}
+      {/* 페이즈 2 · 평가 */}
       <PhaseSection
         id="phase-2"
         step={2}
         title="평가"
         desc="루브릭 기준으로 채점하고 점수·순위·등급을 파생합니다. 등급은 점수에서 계산됩니다."
       >
-        <div className="flex flex-col gap-3">
-          <LinkCard
-            href={`/projects/${project.id}/evaluate`}
-            title="이 단계 화면으로 →"
-            desc="채점 실행·재계산 (실행 UI는 이후 대시보드로 통합됩니다)"
-          />
-          <LinkCard
-            href={`/projects/${project.id}/rubric`}
-            title="평가 루브릭 편집 →"
-            desc="채점 기준·배점·가중치"
-          />
-        </div>
+        <Phase2Panel
+          projectId={project.id}
+          needsRecalc={project.needs_recalc}
+          matchedIncluded={matchedIncluded}
+          scoredSubmissions={scoredSubmissions}
+          providerName={evalProviderName}
+          model={evalModel}
+          criteriaCount={criteria.length}
+          gradingScheme={project.grading_scheme}
+          tieBreak={project.tie_break}
+          effectiveScores={effectiveScores}
+        />
       </PhaseSection>
 
-      {/* 페이즈 3 · 생기부 (골격 — 실행 UI 이식은 배치 7) */}
+      {/* 페이즈 3 · 생기부 */}
       <PhaseSection
         id="phase-3"
         step={3}
         title="생기부"
         desc="학생별로 산출물·관찰 메모에 근거한 생기부를 생성하고 문장을 검증합니다. 학생 한 명씩 격리 생성됩니다."
       >
-        <div className="flex flex-col gap-3">
-          <LinkCard
-            href={`/projects/${project.id}/records`}
-            title="학생별 상세·문장 검증 →"
-            desc="생기부 생성·편집·근거 검증 (일괄 생성 UI는 이후 대시보드로 통합됩니다)"
-          />
-          <LinkCard
-            href={`/projects/${project.id}/profile`}
-            title="프롬프트 프로필 →"
-            desc="생기부 작성 참고·금지사항(계정 기본+오버라이드)"
-          />
-        </div>
+        <Phase3Panel
+          projectId={project.id}
+          routing={routing}
+          providers={routable}
+        />
       </PhaseSection>
 
       {/* 작업결과표 (전폭 full-bleed, 엑셀 시트형) */}

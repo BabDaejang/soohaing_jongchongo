@@ -453,7 +453,7 @@ export async function finalizeEvaluation(
     },
   });
 
-  revalidatePath(`/projects/${projectId}/evaluate`);
+  revalidatePath(`/projects/${projectId}`);
   return result;
 }
 
@@ -462,7 +462,7 @@ export async function recalculate(projectId: string): Promise<RecomputeResult> {
   const { supabase } = await requireProjectOwner(projectId);
   const admin = createAdminClient();
   const result = await recomputeAndSave(projectId, supabase, admin);
-  revalidatePath(`/projects/${projectId}/evaluate`);
+  revalidatePath(`/projects/${projectId}`);
   return result;
 }
 
@@ -498,7 +498,7 @@ export async function setScoreOverride(
 
   const admin = createAdminClient();
   await recomputeAndSave(projectId, supabase, admin);
-  revalidatePath(`/projects/${projectId}/evaluate`);
+  revalidatePath(`/projects/${projectId}`);
 }
 
 export async function clearScoreOverride(projectId: string, studentId: string) {
@@ -520,7 +520,7 @@ export async function clearScoreOverride(projectId: string, studentId: string) {
 
   const admin = createAdminClient();
   await recomputeAndSave(projectId, supabase, admin);
-  revalidatePath(`/projects/${projectId}/evaluate`);
+  revalidatePath(`/projects/${projectId}`);
 }
 
 // ── 등급제 토글 저장(파생 표시라 재계산 불필요) ─────────────────────────
@@ -537,7 +537,7 @@ export async function updateGradingScheme(
     .update({ grading_scheme: scheme })
     .eq("id", projectId);
   if (error) throw new Error(error.message);
-  revalidatePath(`/projects/${projectId}/evaluate`);
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/settings`);
 }
 

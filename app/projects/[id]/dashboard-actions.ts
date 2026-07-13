@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { requireProjectOwner } from "@/lib/projects";
+import { listRoutableProviders } from "@/lib/llm/available";
+import { recommendCostEffective, type ModelCandidate } from "@/lib/llm/recommend";
 import type { ModelRouting, RoutingKey } from "@/lib/llm/types";
 
 // 페이즈 0의 "기본 AI 모델" 저장/전파 (리팩토링 2 배치 5).
@@ -89,6 +91,46 @@ export async function applyDefaultToAllRouting(projectId: string): Promise<void>
   for (const key of ROUTING_KEYS) {
     routing[key] = { ...routing.default };
   }
+
+  const { error } = await supabase
+    .from("projects")
+    .update({ model_routing: routing })
+    .eq("id", projectId);
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+// 가성비 추천 모델을 생성·검증(generate·verify) 라우팅에 적용한다(페이즈 3, 배치 7).
+// 추천은 서버가 쓸 수 있는 키의 저장 모델 목록에서 재계산한다(화면 배지와 동일 함수).
+export async function applyRecommendedGenerate(projectId: string): Promise<void> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  const providers = await listRoutableProviders(userId);
+  const candidates: ModelCandidate[] = providers
+    .filter((p) => p.keySource !== null)
+    .flatMap((p) =>
+      p.models.map((model) => ({
+        providerId: p.id,
+        providerName: p.name,
+        model,
+      })),
+    );
+  const rec = recommendCostEffective(candidates);
+  if (!rec) {
+    throw new Error(
+      "추천할 모델이 없습니다. 계정 옵션에서 [모델 갱신]으로 모델 목록을 채워 주세요.",
+    );
+  }
+
+  const { data: current } = await supabase
+    .from("projects")
+    .select("model_routing")
+    .eq("id", projectId)
+    .single();
+  const routing: ModelRouting = { ...(current?.model_routing as ModelRouting) };
+  const target = { provider_id: rec.providerId, model: rec.model };
+  routing.generate = target;
+  routing.verify = { ...target };
 
   const { error } = await supabase
     .from("projects")

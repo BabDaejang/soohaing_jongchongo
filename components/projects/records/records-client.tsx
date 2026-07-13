@@ -1,22 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { StudentRecordPanel } from "./student-record-panel";
-import { generateRecord } from "@/app/projects/[id]/records/actions";
 import type { CountMethod } from "@/lib/supabase/types";
 import type { StudentRow } from "./types";
 
-type BatchState = {
-  running: boolean;
-  done: number;
-  total: number;
-  current: string | null;
-  failed: number;
-};
-
-// Phase 3 생기부 화면 클라이언트. 학생 사이드바 + 선택 패널 + 일괄 생성.
-// 일괄 생성은 학생별 generateRecord를 **순차 단일 호출**한다(INV-1: 배열 시그니처 함수 없음).
+// Phase 3 생기부 화면 클라이언트. 학생 사이드바 + 선택 패널(개별 생성·검증·버전).
+// 일괄 생성은 대시보드 페이즈 3 실행 터미널로 이동했다(중복 실행 창구 금지 — 배치 7).
 export function RecordsClient({
   projectId,
   charLimit,
@@ -28,90 +18,24 @@ export function RecordsClient({
   countMethod: CountMethod;
   students: StudentRow[];
 }) {
-  const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(
     students[0]?.id ?? null,
   );
-  const [batch, setBatch] = useState<BatchState>({
-    running: false,
-    done: 0,
-    total: 0,
-    current: null,
-    failed: 0,
-  });
 
   const selected = students.find((s) => s.id === selectedId) ?? null;
-
-  async function generateAll() {
-    const targets = students.filter((s) => s.reflectCount > 0 || s.teacherMemo);
-    setBatch({
-      running: true,
-      done: 0,
-      total: targets.length,
-      current: null,
-      failed: 0,
-    });
-    let failed = 0;
-    for (let i = 0; i < targets.length; i++) {
-      setBatch((b) => ({ ...b, done: i, current: targets[i].name }));
-      try {
-        // 학생 한 명 = 호출 한 번 (INV-1).
-        await generateRecord(projectId, targets[i].id);
-      } catch {
-        failed += 1;
-      }
-    }
-    setBatch({
-      running: false,
-      done: targets.length,
-      total: targets.length,
-      current: null,
-      failed,
-    });
-    router.refresh();
-  }
 
   const generatedCount = students.filter((s) => s.record).length;
 
   return (
     <div>
-      <div className="mb-4 flex flex-col gap-2 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={generateAll}
-            disabled={batch.running || students.length === 0}
-            className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
-          >
-            {batch.running ? "생성 중…" : "전체 생성"}
-          </button>
-          <span className="text-xs text-zinc-500">
-            학생 {students.length}명 중 {generatedCount}명 생성됨. 전체 생성은
-            학생별로 한 명씩 순차 처리합니다.
-          </span>
-        </div>
-        {batch.running && (
-          <div>
-            <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
-              <div
-                className="h-full bg-emerald-500 transition-all"
-                style={{
-                  width: `${batch.total ? (batch.done / batch.total) * 100 : 0}%`,
-                }}
-              />
-            </div>
-            <p className="mt-1 text-xs text-zinc-500">
-              {batch.done} / {batch.total}
-              {batch.current && ` · ${batch.current} 처리 중…`}
-            </p>
-          </div>
-        )}
-        {!batch.running && batch.total > 0 && (
-          <p className="text-xs text-emerald-700 dark:text-emerald-400">
-            전체 생성 완료 — {batch.total}명 처리
-            {batch.failed > 0 && ` · 실패 ${batch.failed}명`}
-          </p>
-        )}
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 p-4 text-xs text-zinc-500 dark:border-zinc-800">
+        <span>
+          학생 {students.length}명 중 {generatedCount}명 생성됨.
+        </span>
+        <span className="text-zinc-400">
+          일괄 생성은 프로젝트 대시보드 페이즈 3에서 실행하세요. 아래에서 학생별로 개별
+          생성·검증·편집할 수 있습니다.
+        </span>
       </div>
 
       {students.length === 0 ? (
