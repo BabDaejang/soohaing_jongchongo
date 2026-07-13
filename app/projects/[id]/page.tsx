@@ -6,6 +6,8 @@ import { listRoutableProviders } from "@/lib/llm/available";
 import { WorksheetTable } from "@/components/projects/worksheet/worksheet-table";
 import { PhaseSection } from "@/components/projects/dashboard/phase-section";
 import { DefaultModelPicker } from "@/components/projects/dashboard/default-model-picker";
+import { Phase1Panel } from "@/components/projects/dashboard/phase1-panel";
+import { listUploadedFiles } from "@/app/projects/[id]/ingest/actions";
 import { PersonalKeys } from "@/components/account/personal-keys";
 import type { ModelRouting } from "@/lib/llm/types";
 import type { KeyStatus, Provider } from "@/lib/supabase/types";
@@ -48,6 +50,7 @@ export default async function ProjectHomePage({
     routable,
     providersRes,
     keysRes,
+    uploadedFiles,
   ] = await Promise.all([
     supabase
       .from("students")
@@ -79,6 +82,7 @@ export default async function ProjectHomePage({
       .from("api_keys")
       .select("provider_id, key_last4, models, models_synced_at")
       .eq("owner_id", user.id),
+    listUploadedFiles(id),
   ]);
 
   const worksheetRows = assembleWorksheetRows({
@@ -176,33 +180,21 @@ export default async function ProjectHomePage({
         </div>
       </PhaseSection>
 
-      {/* 페이즈 1 · 수합 (골격 — 실행 UI 이식은 배치 6) */}
+      {/* 페이즈 1 · 수합 */}
       <PhaseSection
         id="phase-1"
         step={1}
         title="수합"
-        desc="학생 산출물(엑셀·문서·PDF·이미지)을 업로드하고 학번 매칭을 확정합니다."
+        desc="학생 산출물(엑셀·문서·PDF·이미지)을 업로드하고 [수합 & 매칭]으로 텍스트 추출·학번 매칭을 실행합니다."
       >
-        <div className="flex flex-col gap-3">
-          <LinkCard
-            href={`/projects/${project.id}/ingest`}
-            title="이 단계 화면으로 →"
-            desc="파일 업로드·텍스트 추출·OCR (실행 UI는 이후 대시보드로 통합됩니다)"
-          />
-          <div className="flex items-center gap-3 text-sm">
-            {pendingCount > 0 && (
-              <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                확인 대기 {pendingCount}건
-              </span>
-            )}
-            <Link
-              href={`/projects/${project.id}/submissions`}
-              className="text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
-            >
-              매칭·확인 →
-            </Link>
-          </div>
-        </div>
+        <Phase1Panel
+          projectId={project.id}
+          ownerId={user.id}
+          providers={routable}
+          extract={routing.extract}
+          initialFiles={uploadedFiles}
+          pendingCount={pendingCount}
+        />
       </PhaseSection>
 
       {/* 페이즈 2 · 평가 (골격 — 실행 UI 이식은 배치 7) */}

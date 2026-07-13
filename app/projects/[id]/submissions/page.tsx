@@ -1,15 +1,12 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { MatchingPanel } from "@/components/projects/submissions/matching-panel";
 import { ConfirmQueue, type QueueItem } from "@/components/projects/submissions/confirm-queue";
 import { StudentSubmissions, type SubRow } from "@/components/projects/submissions/student-submissions";
 import type { Submission } from "@/lib/supabase/types";
 
-// 매칭은 LLM 추정이 필요한 건만 클라이언트가 1건씩 호출하지만, prepare의 결정적 처리·조회에 여유를 둔다.
-export const maxDuration = 60;
-
-// Phase 1(b) 매칭·확인 큐·제출물 상세 (SPEC 5.2·5.4, INV-5).
+// Phase 1(b) 확인 큐·제출물 상세 (SPEC 5.2·5.4, INV-5). 매칭 실행은 대시보드 페이즈 1
+// 단일 창구로 이동했다(리팩토링 2 배치 6) — 이 화면은 확인 큐·재귀속 전담.
 export default async function SubmissionsPage({
   params,
 }: {
@@ -20,17 +17,10 @@ export default async function SubmissionsPage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name, model_routing")
+    .select("id, name")
     .eq("id", id)
     .maybeSingle();
   if (!project) notFound();
-
-  // 추출·매칭 모델 배지(요구 ②): 라우팅의 extract 대상 + 프로바이더명(매칭은 추출과 같은 키).
-  const extractTarget = project.model_routing.extract;
-  const { data: providers } = await supabase.from("providers").select("id, name");
-  const providerName =
-    providers?.find((p) => p.id === extractTarget?.provider_id)?.name ?? "알 수 없음";
-  const extractModel = extractTarget?.model ?? "미설정";
 
   const [studentsRes, submissionsRes] = await Promise.all([
     supabase
@@ -50,8 +40,6 @@ export default async function SubmissionsPage({
 
   const students = studentsRes.data ?? [];
   const submissions = (submissionsRes.data ?? []) as Submission[];
-
-  const unmatchedCount = submissions.filter((s) => s.match_status === "unmatched").length;
 
   const queue: QueueItem[] = submissions
     .filter((s) => s.match_status === "pending_confirm" || s.match_status === "update_pending")
@@ -93,26 +81,17 @@ export default async function SubmissionsPage({
         </Link>
         <h1 className="mt-3 text-2xl font-bold">매칭 · 확인</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          업로드된 제출물을 학생에게 귀속시킵니다. 명단과 모호하지 않게 일치하면 자동으로
-          귀속하고, 동명이인·식별 불가만 아래 큐에서 확인합니다. 자동 귀속이 틀렸다면 학생별
-          제출물에서 다른 학생으로 옮길 수 있습니다.
+          매칭 실행은 대시보드 페이즈 1의 [수합 & 매칭]에서 합니다. 여기서는 동명이인·식별
+          불가로 확인이 필요한 제출물을 학생에게 지정하고, 자동 귀속이 틀렸다면 학생별
+          제출물에서 다른 학생으로 옮깁니다.
           <Link
-            href={`/projects/${project.id}/ingest`}
+            href={`/projects/${project.id}#phase-1`}
             className="ml-1 underline underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"
           >
-            ← 업로드로
+            ← 수합으로
           </Link>
         </p>
       </header>
-
-      <section className="mb-8">
-        <MatchingPanel
-          projectId={project.id}
-          unmatchedCount={unmatchedCount}
-          providerName={providerName}
-          model={extractModel}
-        />
-      </section>
 
       <section className="mb-10">
         <h2 className="mb-3 text-sm font-semibold">확인 대기 큐 ({queue.length})</h2>

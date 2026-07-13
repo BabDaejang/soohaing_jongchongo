@@ -20,6 +20,13 @@ export type PrepareResult = {
   prelude?: { level: TermLevel; text: string }[]; // 대상 요약·결정적 처리 결과 등 선행 로그
 };
 export type StepResult = { ok: boolean; message: string };
+export type RunOutcome = { succeeded: number; failed: number; aborted: boolean };
+// 한 스테이지의 실행 계획. nextStage 연쇄에서 두 번째 스테이지를 기술할 때도 쓴다.
+export type RunPlan = {
+  prepare: () => Promise<PrepareResult>;
+  stepOne: (t: SequentialTarget) => Promise<StepResult>;
+  finalize: (r: RunOutcome) => Promise<string | null>;
+};
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -30,11 +37,10 @@ function nowTs(): string {
 export function useSequentialRun(args: {
   prepare: () => Promise<PrepareResult>;
   stepOne: (t: SequentialTarget) => Promise<StepResult>;
-  finalize: (r: {
-    succeeded: number;
-    failed: number;
-    aborted: boolean;
-  }) => Promise<string | null>;
+  finalize: (r: RunOutcome) => Promise<string | null>;
+  // 첫 스테이지가 정상 종료(중단 아님)하면 이어서 실행할 두 번째 스테이지 계획.
+  // null을 반환하면 연쇄하지 않는다. 연쇄는 1회만(재귀 없음).
+  nextStage?: (r: RunOutcome) => RunPlan | null;
   maxConsecutiveFailures?: number; // 기본 3
 }): {
   lines: TermLine[];
@@ -45,7 +51,8 @@ export function useSequentialRun(args: {
   resume: () => void;
   stop: () => void;
 } {
-  const { prepare, stepOne, finalize, maxConsecutiveFailures = 3 } = args;
+  const { prepare, stepOne, finalize, nextStage, maxConsecutiveFailures = 3 } =
+    args;
 
   const [lines, setLines] = useState<TermLine[]>([]);
   const [runState, setRunState] = useState<RunState>("idle");
@@ -71,7 +78,9 @@ export function useSequentialRun(args: {
     setProgress(null);
     setRunState("running");
 
-    void (async () => {
+    // 한 스테이지(prepare → step×N → finalize)를 실행한다. progress는 스테이지마다
+    // 리셋하고, lines는 초기화하지 않고 이어 붙는다(연쇄 시 앞 스테이지 로그 보존).
+    const runPlan = async (plan: RunPlan): Promise<RunOutcome> => {
       let succeeded = 0;
       let failed = 0;
       let consecutive = 0;
@@ -79,15 +88,13 @@ export function useSequentialRun(args: {
 
       let prep: PrepareResult;
       try {
-        prep = await prepare();
+        prep = await plan.prepare();
       } catch (e) {
         append(
           "error",
           e instanceof Error ? e.message : "준비 중 오류가 발생했습니다.",
         );
-        setRunState("aborted");
-        runningRef.current = false;
-        return;
+        return { succeeded, failed, aborted: true };
       }
 
       for (const p of prep.prelude ?? []) append(p.level, p.text);
@@ -108,7 +115,7 @@ export function useSequentialRun(args: {
 
         const t = targets[i];
         try {
-          const r = await stepOne(t);
+          const r = await plan.stepOne(t);
           append(r.ok ? "ok" : "error", `${t.label} — ${r.message}`);
           if (r.ok) {
             succeeded += 1;
@@ -136,7 +143,7 @@ export function useSequentialRun(args: {
       }
 
       try {
-        const msg = await finalize({ succeeded, failed, aborted });
+        const msg = await plan.finalize({ succeeded, failed, aborted });
         if (msg) append("system", msg);
       } catch (e) {
         append(
@@ -146,10 +153,27 @@ export function useSequentialRun(args: {
         aborted = true;
       }
 
+      return { succeeded, failed, aborted };
+    };
+
+    void (async () => {
+      const first = await runPlan({ prepare, stepOne, finalize });
+      let aborted = first.aborted;
+
+      // 첫 스테이지가 정상 종료면 연쇄 스테이지를 이어 실행(1회만).
+      if (!aborted && nextStage) {
+        const plan2 = nextStage(first);
+        if (plan2) {
+          append("system", "── 다음 단계 ──");
+          const second = await runPlan(plan2);
+          aborted = second.aborted;
+        }
+      }
+
       setRunState(aborted ? "aborted" : "done");
       runningRef.current = false;
     })();
-  }, [prepare, stepOne, finalize, maxConsecutiveFailures, append]);
+  }, [prepare, stepOne, finalize, nextStage, maxConsecutiveFailures, append]);
 
   const pause = useCallback(() => {
     if (!runningRef.current || stopRef.current || pauseRef.current) return;

@@ -184,74 +184,258 @@ export async function saveOcrModel(formData: FormData) {
     .update({ model_routing: next })
     .eq("id", projectId);
   if (error) throw new Error(error.message);
-  revalidatePath(`/projects/${projectId}/ingest`);
+  revalidatePath(`/projects/${projectId}`);
 }
 
-// ── 문서·PDF·이미지 인제스트 (단일 파일 → 제출물 1건) ────────────────
-export async function ingestDocuments(
+// ── 업로드 원본 파일 목록·삭제 (업로드-즉시-파싱 분리, 리팩토링 2 배치 6) ──
+//
+// 업로드는 클라이언트가 Storage에 직접 하고, 파싱/OCR(토큰 소모)은 [수합 & 매칭]
+// 실행 때만 일으킨다. 원본 경로는 항상 `${userId}/${projectId}/` 하위여야 한다.
+
+// 경로가 이 사용자·프로젝트 소유인지 검증한다(스토리지 경로 위조 방어).
+function assertOwnedPath(userId: string, projectId: string, path: string): void {
+  if (!path.startsWith(`${userId}/${projectId}/`)) {
+    throw new Error("접근할 수 없는 파일 경로입니다.");
+  }
+}
+
+// 저장 경로 마지막 세그먼트 `${uuid}__${sanitized}`에서 원래 파일명을 복원한다.
+function restoreFilename(segment: string): string {
+  const idx = segment.indexOf("__");
+  return idx >= 0 ? segment.slice(idx + 2) : segment;
+}
+
+export type UploadedFile = {
+  path: string; // originals 버킷 경로
+  filename: string; // 경로 마지막 세그먼트에서 "uuid__" 이후 복원
+  createdAt: string | null;
+  ingested: boolean; // 이 path를 storage_path로 참조하는 제출물 존재 여부
+};
+
+export async function listUploadedFiles(
   projectId: string,
-  files: { storagePath: string; filename: string }[],
-): Promise<IngestSummary> {
+): Promise<UploadedFile[]> {
   const { userId, supabase } = await requireProjectOwner(projectId);
-  const routing = await loadRouting(supabase, projectId);
-  const summary: IngestSummary = { inserted: 0, skipped: 0, updatePending: 0, errors: [] };
+  const prefix = `${userId}/${projectId}`;
 
-  for (const f of files) {
-    try {
-      const bytes = await downloadBytes(supabase, f.storagePath);
-      const kind = fileKind(f.filename);
-      let text = "";
-      let sourceType: SubmissionSourceType;
+  const [listRes, subsRes] = await Promise.all([
+    supabase.storage.from("originals").list(prefix, {
+      limit: 1000,
+      sortBy: { column: "created_at", order: "desc" },
+    }),
+    supabase
+      .from("submissions")
+      .select("storage_path")
+      .eq("project_id", projectId)
+      .not("storage_path", "is", null),
+  ]);
+  if (listRes.error) throw new Error(listRes.error.message);
 
-      if (kind === "docx") {
-        text = await parseDocx(bytes);
-        sourceType = "docx";
-      } else if (kind === "pdf") {
-        const { text: layer, pages } = await parsePdfText(bytes);
-        if (isLikelyScan(layer, pages)) {
-          text = await ocrExtract(userId, routing, {
-            type: "document",
-            mediaType: "application/pdf",
-            dataBase64: Buffer.from(bytes).toString("base64"),
-            filename: f.filename,
-          });
-          sourceType = "pdf_scan";
-        } else {
-          text = layer;
-          sourceType = "pdf_text";
-        }
-      } else if (kind === "image") {
-        text = await ocrExtract(userId, routing, {
-          type: "image",
-          mediaType: imageMediaType(f.filename),
-          dataBase64: Buffer.from(bytes).toString("base64"),
-        });
-        sourceType = "image";
-      } else {
-        throw new Error("지원하지 않는 파일 형식입니다.");
-      }
+  const ingested = new Set(
+    (subsRes.data ?? []).map((s) => s.storage_path).filter(Boolean),
+  );
 
-      const result = await persistSubmission(supabase, {
-        projectId,
-        submissionKey: f.filename,
-        rawStudentNo: null,
-        rawStudentName: null,
-        sourceFilename: f.filename,
-        storagePath: f.storagePath,
-        sourceType,
-        text,
-      });
-      tally(summary, result);
-    } catch (e) {
-      summary.errors.push({
-        filename: f.filename,
-        message: e instanceof Error ? e.message : "알 수 없는 오류",
-      });
-    }
+  return (listRes.data ?? [])
+    .filter((o) => o.id !== null) // 폴더 플레이스홀더 제외(방어)
+    .map((o) => {
+      const path = `${prefix}/${o.name}`;
+      return {
+        path,
+        filename: restoreFilename(o.name),
+        createdAt: o.created_at ?? null,
+        ingested: ingested.has(path),
+      };
+    });
+}
+
+export async function deleteUploadedFile(
+  projectId: string,
+  path: string,
+): Promise<void> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  assertOwnedPath(userId, projectId, path);
+
+  // INV-5 우회 금지: 이미 수합된 파일의 원본 삭제는 추출 확인(승인) 절차를 따른다.
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select("id")
+    .eq("project_id", projectId)
+    .eq("storage_path", path)
+    .maybeSingle();
+  if (sub) {
+    throw new Error(
+      "이미 수합된 파일입니다 — 원본 삭제는 제출물 상세의 추출 확인(승인) 절차를 따르세요.",
+    );
   }
 
-  revalidatePath(`/projects/${projectId}/ingest`);
-  return summary;
+  const { error } = await supabase.storage.from("originals").remove([path]);
+  if (error) throw new Error(error.message);
+  revalidatePath(`/projects/${projectId}`);
+}
+
+// ── 수합 실행 (1건 단위 — prepareIngest → ingestOneFile × N → finalizeIngest) ──
+export type IngestTarget = { id: string; label: string }; // id = storage path, label = filename
+
+export async function prepareIngest(
+  projectId: string,
+  paths: string[],
+): Promise<{
+  targets: IngestTarget[];
+  prelude: { level: "info" | "system"; text: string }[];
+}> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const prefix = `${userId}/${projectId}`;
+
+  const { data: objs } = await supabase.storage
+    .from("originals")
+    .list(prefix, { limit: 1000 });
+  const existing = new Set((objs ?? []).map((o) => `${prefix}/${o.name}`));
+
+  const targets: IngestTarget[] = [];
+  for (const path of paths) {
+    assertOwnedPath(userId, projectId, path);
+    if (!existing.has(path)) continue; // 사라진 파일은 건너뛴다
+    targets.push({
+      id: path,
+      label: restoreFilename(path.split("/").pop() ?? path),
+    });
+  }
+
+  const prelude: { level: "info" | "system"; text: string }[] =
+    targets.length === 0
+      ? [{ level: "system", text: "수합할 새 파일 없음 — 매칭만 진행합니다." }]
+      : [{ level: "info", text: `수합 대상 ${targets.length}개 파일` }];
+  return { targets, prelude };
+}
+
+// 파일 1개를 수합한다(다운로드 → 파싱/OCR → persistSubmission). throw하지 않고
+// { ok, message }로 결과를 돌려준다(서킷 브레이커는 ok:false만 실패로 센다).
+// mapping은 교사가 확정한 열 인덱스뿐 — 내용 주입이 아니다(기존 신뢰 수준 동일).
+export async function ingestOneFile(
+  projectId: string,
+  path: string,
+  mapping?: ColumnMapping,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const { userId, supabase } = await requireProjectOwner(projectId);
+    assertOwnedPath(userId, projectId, path);
+    const filename = restoreFilename(path.split("/").pop() ?? path);
+    const kind = fileKind(filename);
+
+    if (kind === "spreadsheet") {
+      if (!mapping) return { ok: false, message: "열 매핑이 필요합니다" };
+      const { data, isCsv } = await parseSheet(supabase, path, filename);
+      const sourceType: SubmissionSourceType = isCsv ? "csv" : "xlsx";
+      const summary: IngestSummary = {
+        inserted: 0,
+        skipped: 0,
+        updatePending: 0,
+        errors: [],
+      };
+      const cell = (row: string[], idx: number | null) =>
+        idx != null ? (row[idx] ?? "").trim() : "";
+
+      for (let i = 0; i < data.rows.length; i++) {
+        const row = data.rows[i];
+        const rawStudentNo = cell(row, mapping.studentNo) || null;
+        const rawStudentName = cell(row, mapping.studentName) || null;
+        const submissionId = cell(row, mapping.submissionId);
+        const content = cell(row, mapping.content);
+        if (!content) continue; // 내용이 없는 행은 제출물로 만들지 않는다.
+
+        const submissionKey = submissionId || `${filename}#row${i + 1}`;
+        try {
+          const result = await persistSubmission(supabase, {
+            projectId,
+            submissionKey,
+            rawStudentNo,
+            rawStudentName,
+            sourceFilename: filename,
+            storagePath: path,
+            sourceType,
+            text: content,
+          });
+          tally(summary, result);
+        } catch (e) {
+          summary.errors.push({
+            filename: `${filename} (${i + 1}행)`,
+            message: e instanceof Error ? e.message : "알 수 없는 오류",
+          });
+        }
+      }
+      const errPart =
+        summary.errors.length > 0 ? ` · 오류 ${summary.errors.length}` : "";
+      return {
+        ok: true,
+        message: `${data.rows.length}행 → 신규 ${summary.inserted} · 중복 ${summary.skipped} · 변경 대기 ${summary.updatePending}${errPart}`,
+      };
+    }
+
+    const routing = await loadRouting(supabase, projectId);
+    const bytes = await downloadBytes(supabase, path);
+    let text = "";
+    let sourceType: SubmissionSourceType;
+
+    if (kind === "docx") {
+      text = await parseDocx(bytes);
+      sourceType = "docx";
+    } else if (kind === "pdf") {
+      const { text: layer, pages } = await parsePdfText(bytes);
+      if (isLikelyScan(layer, pages)) {
+        text = await ocrExtract(userId, routing, {
+          type: "document",
+          mediaType: "application/pdf",
+          dataBase64: Buffer.from(bytes).toString("base64"),
+          filename,
+        });
+        sourceType = "pdf_scan";
+      } else {
+        text = layer;
+        sourceType = "pdf_text";
+      }
+    } else if (kind === "image") {
+      text = await ocrExtract(userId, routing, {
+        type: "image",
+        mediaType: imageMediaType(filename),
+        dataBase64: Buffer.from(bytes).toString("base64"),
+      });
+      sourceType = "image";
+    } else {
+      return { ok: false, message: "지원하지 않는 파일 형식입니다." };
+    }
+
+    const result = await persistSubmission(supabase, {
+      projectId,
+      submissionKey: filename,
+      rawStudentNo: null,
+      rawStudentName: null,
+      sourceFilename: filename,
+      storagePath: path,
+      sourceType,
+      text,
+    });
+    const label =
+      result === "inserted"
+        ? `신규(${sourceType})`
+        : result === "skipped"
+          ? "중복 스킵"
+          : "변경 대기";
+    return { ok: true, message: label };
+  } catch (e) {
+    return {
+      ok: false,
+      message: (e instanceof Error ? e.message : "처리 중 오류").slice(0, 300),
+    };
+  }
+}
+
+export async function finalizeIngest(
+  projectId: string,
+  counts: { succeeded: number; failed: number },
+): Promise<string> {
+  await requireProjectOwner(projectId);
+  revalidatePath(`/projects/${projectId}`);
+  return `수합 완료 — 성공 ${counts.succeeded}·실패 ${counts.failed}`;
 }
 
 // ── 스프레드시트: 헤더 미리보기 + LLM 초기 열 추천 ───────────────────
@@ -346,50 +530,3 @@ export async function previewSpreadsheet(
   };
 }
 
-// ── 스프레드시트 인제스트 (행 → 제출물 후보, dedup) ──────────────────
-export async function ingestSpreadsheet(
-  projectId: string,
-  storagePath: string,
-  filename: string,
-  mapping: ColumnMapping,
-): Promise<IngestSummary> {
-  const { supabase } = await requireProjectOwner(projectId);
-  const { data, isCsv } = await parseSheet(supabase, storagePath, filename);
-  const sourceType: SubmissionSourceType = isCsv ? "csv" : "xlsx";
-  const summary: IngestSummary = { inserted: 0, skipped: 0, updatePending: 0, errors: [] };
-
-  const cell = (row: string[], idx: number | null) =>
-    idx != null ? (row[idx] ?? "").trim() : "";
-
-  for (let i = 0; i < data.rows.length; i++) {
-    const row = data.rows[i];
-    const rawStudentNo = cell(row, mapping.studentNo) || null;
-    const rawStudentName = cell(row, mapping.studentName) || null;
-    const submissionId = cell(row, mapping.submissionId);
-    const content = cell(row, mapping.content);
-    if (!content) continue; // 내용이 없는 행은 제출물로 만들지 않는다.
-
-    const submissionKey = submissionId || `${filename}#row${i + 1}`;
-    try {
-      const result = await persistSubmission(supabase, {
-        projectId,
-        submissionKey,
-        rawStudentNo,
-        rawStudentName,
-        sourceFilename: filename,
-        storagePath,
-        sourceType,
-        text: content,
-      });
-      tally(summary, result);
-    } catch (e) {
-      summary.errors.push({
-        filename: `${filename} (${i + 1}행)`,
-        message: e instanceof Error ? e.message : "알 수 없는 오류",
-      });
-    }
-  }
-
-  revalidatePath(`/projects/${projectId}/ingest`);
-  return summary;
-}
