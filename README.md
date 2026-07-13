@@ -37,7 +37,13 @@
 | `ADMIN_EMAIL` | 최초 관리자로 자동 승격할 Google 이메일 | 운영자 계정 |
 | `CRON_SECRET` | 원본 자동 삭제 Cron 보호 시크릿 | `openssl rand -hex 32` |
 | `SUPABASE_DB_URL` | 마이그레이션 적용용 DB 연결(**CLI 전용**, 앱 미사용) | 대시보드 → Settings → Database |
+| `ALADIN_TTB_KEY` | (선택) 도서팩트시트 알라딘 API 메타·목차 수집 | 알라딘 TTB 개발자 키 |
+| `NAVER_CLIENT_ID` | (선택) 도서팩트시트 네이버 검색 API(웹 문서 URL) | 네이버 개발자센터 애플리케이션 |
+| `NAVER_CLIENT_SECRET` | (선택) 네이버 검색 API 시크릿 | 네이버 개발자센터 애플리케이션 |
 
+> 검색 키 3종(`ALADIN_TTB_KEY`·`NAVER_CLIENT_ID`·`NAVER_CLIENT_SECRET`)은 **선택**이다. 관리자가 1회 등록하며
+> (교사별 불필요), 미설정 시 도서팩트시트 자동 수집·보강만 비활성화되고 나머지 기능은 정상 동작한다(에러 아님).
+>
 > Google OAuth 클라이언트 ID/시크릿은 **앱 환경변수가 아니라** Supabase 대시보드(Authentication →
 > Providers → Google)에 등록한다.
 
@@ -107,8 +113,9 @@ supabase db push --db-url "$SUPABASE_DB_URL"
 ## 5. Vercel 배포
 
 1. Vercel에 저장소 연결(Framework Preset: **Next.js**). 빌드 커맨드는 기본 `next build`, 설치는 `npm install`.
-2. **환경변수**: 2절 표의 7개를 Vercel 프로젝트 Settings → Environment Variables에 등록
+2. **환경변수**: 2절 표의 필수 7개를 Vercel 프로젝트 Settings → Environment Variables에 등록
    (`NEXT_PUBLIC_*`는 공개, 나머지는 서버 전용). `SUPABASE_DB_URL`은 런타임에 필요 없으나 등록해 두어도 무방하다.
+   도서팩트시트 자동 수집을 쓰려면 선택 3종(`ALADIN_TTB_KEY`·`NAVER_CLIENT_ID`·`NAVER_CLIENT_SECRET`)도 등록한다.
 3. **원본 자동 삭제 Cron**: 저장소 루트의 [`vercel.json`](vercel.json)이 `/api/cron/purge-originals`를 매일
    03:00(UTC)에 호출하도록 배선한다. Vercel은 `CRON_SECRET`이 설정돼 있으면 이 값을 `Authorization: Bearer`로
    자동 첨부하고, 라우트가 이를 검증한다(불일치 401, 미설정 503). 이 Cron은 **추출 승인된**(INV-5) 원본만,
