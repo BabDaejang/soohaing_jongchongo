@@ -171,7 +171,7 @@ export function StudentSubmissions({
       content_text: 350,
       authenticity_status: 120,
       authenticity_reason: 500,
-      actions: 240,
+      actions: 200,
     };
   });
 
@@ -422,7 +422,7 @@ export function StudentSubmissions({
   const handleDeleteColumn = (filename: string) => {
     if (
       confirm(
-        `'${filename}' 열의 모든 학생 제출물 데이터를 일괄 삭제하시겠습니까?\n(데이터베이스 제출물 레코드가 지워지며 스토리지의 원본 분할 임시 파일도 지워집니다.)`
+        `'${filename}' 파일의 모든 학생 제출물 데이터를 일괄 삭제하시겠습니까?\n(데이터베이스 제출물 레코드가 지워지며 스토리지의 원본 분할 임시 파일도 지워집니다.)`
       )
     ) {
       start(async () => {
@@ -431,7 +431,7 @@ export function StudentSubmissions({
           await deleteSubmissionsByFile(projectId, filename);
           router.refresh();
         } catch (e) {
-          setError(e instanceof Error ? e.message : "열 삭제 실패");
+          setError(e instanceof Error ? e.message : "삭제 실패");
         }
       });
     }
@@ -451,38 +451,38 @@ export function StudentSubmissions({
     }
 
     return (
-      <div className="flex flex-col gap-2 py-1">
+      <div className="flex flex-col gap-1.5 py-1">
         {findings.map((f, i) => {
           let badgeClass = "";
           let verdictLabel = "";
           let highlightTextClass = "";
 
           if (f.verdict === "contradicted") {
-            badgeClass = "border-2 border-black bg-red-100 text-red-700 shadow-neo-sm font-black";
+            badgeClass = "border border-red-200 bg-red-50 text-red-700";
             verdictLabel = "의심";
-            highlightTextClass = "bg-red-100 dark:bg-red-950/40 text-red-950 font-black px-1 rounded border-b-2 border-red-500 whitespace-pre-wrap";
+            highlightTextClass = "bg-red-50 text-red-800 font-bold px-1 rounded border-b border-red-300 whitespace-pre-wrap";
           } else if (f.verdict === "not_found") {
-            badgeClass = "border-2 border-black bg-amber-100 text-amber-800 shadow-neo-sm font-black";
+            badgeClass = "border border-amber-200 bg-amber-50 text-amber-800";
             verdictLabel = "확인 불가";
-            highlightTextClass = "bg-amber-100 dark:bg-amber-950/40 text-amber-950 px-1 rounded border-b-2 border-amber-500 whitespace-pre-wrap";
+            highlightTextClass = "bg-amber-50 text-amber-900 px-1 rounded border-b border-amber-300 whitespace-pre-wrap";
           } else {
-            badgeClass = "border border-zinc-300 bg-green-50 text-green-700 font-bold";
+            badgeClass = "border border-green-200 bg-green-50 text-green-700";
             verdictLabel = "확인 완료";
-            highlightTextClass = "bg-green-50 text-green-900 px-1 rounded border-b border-green-500 whitespace-pre-wrap";
+            highlightTextClass = "bg-green-50 text-green-900 px-1 rounded border-b border-green-200 whitespace-pre-wrap";
           }
 
           return (
-            <div key={i} className="border-2 border-black bg-white p-2 text-xs shadow-neo-sm">
-              <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
-                <span className={`px-1.5 py-0.5 text-[10px] uppercase ${badgeClass}`}>
+            <div key={i} className="border border-zinc-200 dark:border-zinc-800 bg-zinc-50/50 p-2 text-xs rounded">
+              <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                <span className={`px-1 py-0.5 text-[10px] rounded font-bold ${badgeClass}`}>
                   {verdictLabel}
                 </span>
-                <span className="font-extrabold text-zinc-800 dark:text-zinc-200">
+                <span className="font-semibold text-zinc-700 dark:text-zinc-300">
                   주장: <span className={highlightTextClass}>{f.claim}</span>
                 </span>
               </div>
               {f.quote && (
-                <div className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-1 pl-2 border-l-2 border-zinc-400 bg-zinc-50 py-0.5 italic">
+                <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 pl-2 border-l-2 border-zinc-300 bg-white/40 py-0.5 italic">
                   근거 인용: "{f.quote}"
                 </div>
               )}
@@ -496,23 +496,23 @@ export function StudentSubmissions({
   return (
     <div className="flex flex-col gap-4">
       {error && (
-        <p className="text-sm font-bold text-red-700 bg-red-100 p-4 border-4 border-black shadow-neo-sm">
+        <p className="text-sm font-bold text-red-700 bg-red-50 p-3 rounded border border-red-200">
           ⚠️ {error}
         </p>
       )}
 
       {/* Top section: Uploaded files batch delete */}
       {fileColumns.length > 0 && (
-        <div className="flex flex-wrap gap-2.5 items-center text-xs font-bold border-4 border-black bg-[#FFFDF5] p-4 shadow-neo-sm">
-          <span className="bg-black text-white px-2 py-1 shadow-neo-sm uppercase text-[10px]">수합 파일 삭제 관리</span>
+        <div className="flex flex-wrap gap-2 items-center text-xs font-semibold border border-zinc-200 bg-zinc-50 p-3 rounded-md">
+          <span className="bg-zinc-800 text-white px-2 py-0.5 rounded text-[10px] uppercase">수합 파일 삭제 관리</span>
           {fileColumns.map((file) => (
-            <div key={file} className="flex items-center gap-1.5 border-2 border-black bg-white px-2.5 py-1.5 shadow-neo-xs">
+            <div key={file} className="flex items-center gap-1.5 border border-zinc-300 bg-white px-2 py-1 rounded text-zinc-700 shadow-sm">
               <span className="truncate max-w-[200px]" title={file}>{file}</span>
               <button
                 type="button"
                 disabled={pending}
                 onClick={() => handleDeleteColumn(file)}
-                className="text-red-500 hover:text-red-700 font-black cursor-pointer border-l-2 border-black pl-2 ml-1"
+                className="text-red-600 hover:text-red-800 font-bold cursor-pointer border-l border-zinc-200 pl-1.5 ml-1"
               >
                 삭제
               </button>
@@ -521,11 +521,11 @@ export function StudentSubmissions({
         </div>
       )}
 
-      {/* Grid spreadsheet container */}
-      <div className="overflow-x-auto rounded-lg border-4 border-black bg-white shadow-neo-sm">
+      {/* Grid spreadsheet container (WorksheetTable style - clean grey borders, no Neo-Brutalism) */}
+      <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white shadow-sm">
         <table className="w-full border-collapse text-sm table-fixed">
           <thead>
-            <tr className="bg-zinc-100 text-left border-b-4 border-black font-black text-zinc-800">
+            <tr className="bg-zinc-100 dark:bg-zinc-900 text-left border-b border-zinc-200 dark:border-zinc-800 font-semibold text-zinc-700 dark:text-zinc-300">
               {/* Columns Header with resize, sort, and filter */}
               {[
                 { key: "student_number", label: "학번", filterable: true },
@@ -544,13 +544,13 @@ export function StudentSubmissions({
                   <th
                     key={col.key}
                     style={{ width }}
-                    className="relative border-r-2 border-black px-3 py-3 font-black select-none text-xs tracking-tight"
+                    className="relative border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 font-semibold select-none text-xs tracking-tight bg-zinc-50 dark:bg-zinc-900/60"
                   >
                     <div className="flex items-center justify-between gap-1">
                       {/* Sort toggler */}
                       <span
                         onClick={() => handleSortToggle(col.key)}
-                        className="cursor-pointer hover:underline flex items-center gap-1 truncate"
+                        className="cursor-pointer hover:underline flex items-center gap-1 truncate text-zinc-700 dark:text-zinc-300 font-semibold"
                       >
                         {col.label}
                         {isSorted && (sort.dir === "asc" ? " ▲" : " ▼")}
@@ -562,32 +562,32 @@ export function StudentSubmissions({
                           <button
                             type="button"
                             onClick={() => setActiveFilterCol(activeFilterCol === col.key ? null : col.key)}
-                            className={`px-1.5 py-0.5 border border-black text-[10px] font-black rounded hover:bg-zinc-200 transition-all cursor-pointer ${
-                              isFiltered ? "bg-neo-accent text-white shadow-neo-xs" : "bg-white text-black"
+                            className={`px-1.5 py-0.5 border border-zinc-300 rounded text-[10px] font-bold hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-all cursor-pointer ${
+                              isFiltered ? "bg-zinc-800 text-white border-zinc-800" : "bg-white text-zinc-700"
                             }`}
                           >
                             필터
                           </button>
                           {activeFilterCol === col.key && (
-                            <div className="absolute right-0 top-full z-40 mt-1 w-56 rounded-md border-4 border-black bg-white p-2.5 text-left text-xs shadow-neo-sm">
-                              <div className="flex items-center justify-between border-b-2 border-black pb-1 mb-1 font-bold">
+                            <div className="absolute right-0 top-full z-40 mt-1 w-56 rounded-md border border-zinc-200 bg-white p-2 text-left text-xs shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+                              <div className="flex items-center justify-between border-b border-zinc-200 pb-1 mb-1 font-bold">
                                 <span>필터 선택</span>
                                 <button
                                   type="button"
                                   onClick={() => handleClearFilter(col.key)}
-                                  className="underline hover:text-neo-accent font-bold"
+                                  className="underline hover:text-zinc-800 font-bold text-zinc-500"
                                 >
                                   초기화
                                 </button>
                               </div>
-                              <div className="max-h-48 overflow-y-auto flex flex-col gap-1.5 py-1">
+                              <div className="max-h-48 overflow-y-auto flex flex-col gap-1 py-1">
                                 {uniqueValues[col.key]?.map((val) => (
                                   <label key={val} className="flex items-center gap-1.5 cursor-pointer hover:bg-zinc-50 py-0.5 px-1">
                                     <input
                                       type="checkbox"
                                       checked={filters[col.key]?.includes(val) ?? false}
                                       onChange={(e) => handleFilterToggle(col.key, val, e.target.checked)}
-                                      className="h-3.5 w-3.5 border-2 border-black rounded"
+                                      className="h-3.5 w-3.5 border border-zinc-300 rounded"
                                     />
                                     <span className="truncate">{(STATUS_LABELS[val] ?? val) || "(빈 값)"}</span>
                                   </label>
@@ -602,37 +602,37 @@ export function StudentSubmissions({
                     {/* Resize handle */}
                     <div
                       onMouseDown={(e) => handleResizeStart(col.key, e)}
-                      className="absolute -right-0.5 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-zinc-400 active:bg-black"
+                      className="absolute -right-0.5 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-zinc-300 active:bg-zinc-400"
                     />
                   </th>
                 );
               })}
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-300">
+          <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
             {sortedRows.map((row) => {
               const approved = !!row.extraction_approved_at;
 
-              // Render custom high-visibility authenticity badges
+              // Render custom high-visibility authenticity badges (Clean standard styled badges)
               let badgeColor = "";
               let statusText = "";
               if (row.isEmptyRow) {
-                badgeColor = "border-2 border-black bg-zinc-100 text-zinc-400";
+                badgeColor = "border border-zinc-200 bg-zinc-50 text-zinc-400";
                 statusText = "미제출";
               } else if (row.authenticity_status === "suspect") {
-                badgeColor = "border-2 border-black bg-red-500 text-white shadow-neo-sm";
+                badgeColor = "border border-red-200 bg-red-50 text-red-700 font-semibold";
                 statusText = "의심";
               } else if (row.authenticity_status === "unverifiable") {
-                badgeColor = "border-2 border-black bg-amber-400 text-black shadow-neo-sm";
+                badgeColor = "border border-amber-200 bg-amber-50 text-amber-800 font-semibold";
                 statusText = "판정 불가";
               } else if (row.authenticity_status === "verified") {
-                badgeColor = "border-2 border-black bg-green-500 text-white shadow-neo-sm";
+                badgeColor = "border border-green-200 bg-green-50 text-green-700 font-semibold";
                 statusText = "통과";
               } else if (row.authenticity_status === "unverified") {
-                badgeColor = "border-2 border-black bg-zinc-200 text-zinc-700";
+                badgeColor = "border border-zinc-200 bg-zinc-50 text-zinc-500 font-semibold";
                 statusText = "미검증";
               } else {
-                badgeColor = "border border-zinc-300 bg-zinc-50 text-zinc-400";
+                badgeColor = "border border-zinc-200 bg-zinc-50 text-zinc-400";
                 statusText = "해당 없음";
               }
 
@@ -641,29 +641,29 @@ export function StudentSubmissions({
                   key={row.id}
                   className={`align-top hover:bg-zinc-50/50 transition-colors ${
                     row.authenticity_status === "suspect"
-                      ? "bg-red-50/20"
+                      ? "bg-red-50/10"
                       : row.authenticity_status === "unverifiable"
-                      ? "bg-amber-50/10"
+                      ? "bg-amber-50/5"
                       : ""
                   }`}
                 >
                   {/* 학번 셀 */}
-                  <td className="border-r border-zinc-200 px-3 py-2.5 font-mono text-zinc-600">
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 font-mono text-zinc-500">
                     {row.student_number || "-"}
                   </td>
 
                   {/* 이름 셀 */}
-                  <td className="border-r border-zinc-200 px-3 py-2.5 font-bold text-zinc-800">
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 font-semibold text-zinc-800 dark:text-zinc-200">
                     {row.student_name}
                   </td>
 
                   {/* 파일명 셀 */}
-                  <td className="border-r border-zinc-200 px-3 py-2.5 text-xs truncate max-w-[200px]" title={row.source_filename ?? ""}>
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-xs truncate max-w-[200px]" title={row.source_filename ?? ""}>
                     {row.source_filename || <span className="text-zinc-300">—</span>}
                   </td>
 
-                  {/* 제출 내용 셀 (클릭/버튼 수정 지원) */}
-                  <td className="border-r border-zinc-200 px-3 py-2.5 text-xs">
+                  {/* 제출 내용 셀 (높이 제한 없이 늘어나는 셀) */}
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-xs">
                     {row.isEmptyRow ? (
                       addingId === row.student_id ? (
                         <div className="flex flex-col gap-1.5">
@@ -671,7 +671,7 @@ export function StudentSubmissions({
                             value={addingText}
                             onChange={(e) => setAddingText(e.target.value)}
                             placeholder="수동 제출 내용 입력…"
-                            className="w-full text-xs p-2 border-2 border-black rounded focus:outline-none bg-white font-mono shadow-neo-xs"
+                            className="w-full text-xs p-2 border border-zinc-300 rounded focus:outline-none bg-white font-mono shadow-sm"
                             rows={4}
                           />
                           <div className="flex justify-end gap-1.5">
@@ -679,7 +679,7 @@ export function StudentSubmissions({
                               type="button"
                               disabled={pending || !addingText.trim()}
                               onClick={() => handleAddManual(row.student_id!)}
-                              className="px-2.5 py-1 bg-neo-accent text-white border-2 border-black font-black rounded text-[10px] shadow-neo-xs hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all cursor-pointer"
+                              className="px-2 py-1 bg-zinc-800 text-white rounded text-[10px] hover:bg-zinc-700 transition cursor-pointer font-bold"
                             >
                               저장
                             </button>
@@ -689,7 +689,7 @@ export function StudentSubmissions({
                                 setAddingId(null);
                                 setAddingText("");
                               }}
-                              className="px-2.5 py-1 bg-white text-black border-2 border-black font-black rounded text-[10px] shadow-neo-xs hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all cursor-pointer"
+                              className="px-2 py-1 border border-zinc-300 rounded text-[10px] hover:bg-zinc-50 bg-white text-zinc-700 font-bold transition cursor-pointer"
                             >
                               취소
                             </button>
@@ -704,7 +704,7 @@ export function StudentSubmissions({
                               setAddingId(row.student_id);
                               setAddingText("");
                             }}
-                            className="mt-1 border-2 border-black bg-neo-secondary px-2.5 py-1 text-xs font-black shadow-neo-xs hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] transition-all cursor-pointer rounded"
+                            className="mt-1 px-2.5 py-1 bg-zinc-800 text-white text-xs font-bold hover:bg-zinc-700 transition cursor-pointer rounded"
                           >
                             + 수동 추가
                           </button>
@@ -715,7 +715,7 @@ export function StudentSubmissions({
                         <textarea
                           value={editText}
                           onChange={(e) => setEditText(e.target.value)}
-                          className="w-full text-xs p-2 border-2 border-black rounded focus:outline-none bg-white font-mono shadow-neo-xs"
+                          className="w-full text-xs p-2 border border-zinc-300 rounded focus:outline-none bg-white font-mono shadow-sm"
                           rows={6}
                         />
                         <div className="flex justify-end gap-1.5">
@@ -723,7 +723,7 @@ export function StudentSubmissions({
                             type="button"
                             disabled={pending}
                             onClick={() => handleSaveEdit(row.id)}
-                            className="px-2.5 py-1 bg-neo-accent text-white border-2 border-black font-black rounded text-[10px] shadow-neo-xs hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all cursor-pointer"
+                            className="px-2.5 py-1 bg-zinc-800 text-white rounded text-[10px] hover:bg-zinc-700 font-bold transition cursor-pointer"
                           >
                             저장
                           </button>
@@ -733,7 +733,7 @@ export function StudentSubmissions({
                               setEditingId(null);
                               setEditText("");
                             }}
-                            className="px-2.5 py-1 bg-white text-black border-2 border-black font-black rounded text-[10px] shadow-neo-xs hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all cursor-pointer"
+                            className="px-2.5 py-1 border border-zinc-300 rounded text-[10px] hover:bg-zinc-50 bg-white text-zinc-700 font-bold transition cursor-pointer"
                           >
                             취소
                           </button>
@@ -741,7 +741,7 @@ export function StudentSubmissions({
                       </div>
                     ) : (
                       <div
-                        className="whitespace-pre-wrap max-h-36 overflow-y-auto font-mono leading-relaxed cursor-pointer hover:bg-zinc-50 p-1 border border-transparent hover:border-zinc-200 rounded"
+                        className="whitespace-pre-wrap font-mono leading-relaxed cursor-pointer hover:bg-zinc-50 p-1 border border-transparent hover:border-zinc-200 rounded"
                         onClick={() => {
                           setEditingId(row.id);
                           setEditText(row.content_text);
@@ -754,14 +754,14 @@ export function StudentSubmissions({
                   </td>
 
                   {/* 진실성 판정 셀 */}
-                  <td className="border-r border-zinc-200 px-3 py-2.5 text-center">
-                    <span className={`inline-block px-3 py-1 font-black rounded text-xs select-none ${badgeColor}`}>
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-center">
+                    <span className={`inline-block px-2.5 py-0.5 rounded text-xs select-none ${badgeColor}`}>
                       {statusText}
                     </span>
                   </td>
 
                   {/* 판정 사유 셀 (findings & 하이라이트 포함) */}
-                  <td className="border-r border-zinc-200 px-3 py-2.5">
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5">
                     {renderFindings(row)}
                   </td>
 
@@ -770,13 +770,13 @@ export function StudentSubmissions({
                     {!row.isEmptyRow ? (
                       <div className="flex flex-col gap-2">
                         {/* 평가/생기부 토글 체크박스 */}
-                        <div className="flex items-center gap-3 border-2 border-black bg-zinc-50 p-1.5 shadow-neo-xs font-bold text-[11px] justify-around">
+                        <div className="flex items-center gap-3 border border-zinc-200 bg-zinc-50 p-1.5 rounded font-semibold text-[11px] justify-around">
                           <label className="flex items-center gap-1 cursor-pointer select-none">
                             <input
                               type="checkbox"
                               defaultChecked={row.include_in_eval}
                               onChange={(e) => void toggleInclude(projectId, row.id, "eval", e.target.checked)}
-                              className="h-3.5 w-3.5 border-2 border-black"
+                              className="h-3.5 w-3.5 border border-zinc-300 rounded"
                             />
                             평가
                           </label>
@@ -785,7 +785,7 @@ export function StudentSubmissions({
                               type="checkbox"
                               defaultChecked={row.include_in_record}
                               onChange={(e) => void toggleInclude(projectId, row.id, "record", e.target.checked)}
-                              className="h-3.5 w-3.5 border-2 border-black"
+                              className="h-3.5 w-3.5 border border-zinc-300 rounded"
                             />
                             생기부
                           </label>
@@ -793,12 +793,12 @@ export function StudentSubmissions({
 
                         {/* 귀속 이동 드롭다운 */}
                         <div className="flex flex-col gap-0.5">
-                          <span className="text-[10px] font-black text-zinc-500">학생 귀속 변경:</span>
+                          <span className="text-[10px] font-bold text-zinc-400">학생 귀속 변경:</span>
                           <select
                             value=""
                             onChange={(e) => handleReassign(row.id, e.target.value)}
                             disabled={pending}
-                            className="text-xs px-2 py-1 border-2 border-black bg-white font-bold rounded shadow-neo-xs focus:outline-none w-full"
+                            className="text-xs px-2 py-1 border border-zinc-300 bg-white font-medium rounded focus:outline-none w-full text-zinc-700 hover:border-zinc-400 cursor-pointer"
                           >
                             <option value="">학생 선택 이동…</option>
                             {students
@@ -812,7 +812,7 @@ export function StudentSubmissions({
                         </div>
 
                         {/* 원본 관리 및 삭제 액션 */}
-                        <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-black justify-end border-t border-dashed border-zinc-200 pt-1.5">
+                        <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-bold justify-end border-t border-dashed border-zinc-200 pt-1.5">
                           {row.storage_path ? (
                             approved ? (
                               <button
@@ -834,7 +834,7 @@ export function StudentSubmissions({
                               </button>
                             )
                           ) : (
-                            <span className="text-zinc-400 font-bold">원본없음</span>
+                            <span className="text-zinc-400">원본없음</span>
                           )}
                           <button
                             type="button"
@@ -857,7 +857,7 @@ export function StudentSubmissions({
                         </div>
                       </div>
                     ) : (
-                      <div className="text-zinc-400 italic text-[11px] text-center font-bold">
+                      <div className="text-zinc-400 italic text-[11px] text-center font-semibold">
                         수합된 제출물이 없습니다.
                       </div>
                     )}
@@ -867,7 +867,7 @@ export function StudentSubmissions({
             })}
             {sortedRows.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-3 py-10 text-center font-bold text-zinc-400">
+                <td colSpan={7} className="px-3 py-10 text-center font-semibold text-zinc-400">
                   제출물 목록이 비어있거나 필터 조건에 맞는 학생이 없습니다.
                 </td>
               </tr>
