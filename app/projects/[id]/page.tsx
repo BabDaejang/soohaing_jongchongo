@@ -66,7 +66,7 @@ export default async function ProjectHomePage({
       .eq("project_id", id),
     supabase
       .from("submissions")
-      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text")
+      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text, source_type")
       .eq("project_id", id)
       .not("student_id", "is", null),
     supabase

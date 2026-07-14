@@ -10,7 +10,7 @@ export type WorksheetSort = {
 } | null;
 
 export type WorksheetLayout = {
-  widths: Partial<Record<WorksheetColumnKey, number>>; // px, 60~800 클램프
+  widths: Record<string, number>; // px, 60~800 클램프
   hidden: WorksheetColumnKey[];
   sort: WorksheetSort;
   rowHeights: Record<string, number>; // studentId → px, 28~600 클램프
@@ -39,6 +39,7 @@ export const FILTERABLE_COLUMNS: WorksheetColumnKey[] = [
   "student_number",
   "name",
   "submission_count",
+  "score",
   "grade",
 ];
 
@@ -86,10 +87,13 @@ export function normalizeWorksheetLayout(
   const obj = isRecord(raw) ? raw : {};
 
   const rawWidths = isRecord(obj.widths) ? obj.widths : {};
-  const widths: Partial<Record<WorksheetColumnKey, number>> = {};
-  for (const key of WORKSHEET_COLUMNS) {
-    const v = rawWidths[key];
-    if (typeof v === "number" && Number.isFinite(v)) widths[key] = clampWidth(v);
+  const widths: Record<string, number> = {};
+  for (const [key, v] of Object.entries(rawWidths)) {
+    if (typeof v === "number" && Number.isFinite(v)) {
+      if ((WORKSHEET_COLUMNS as readonly string[]).includes(key) || key.startsWith("sub_detail_")) {
+        widths[key] = clampWidth(v);
+      }
+    }
   }
 
   // hidden: 유효 키만·순서 정규화·중복 제거.

@@ -235,11 +235,15 @@ export function WorksheetTable({
   }
 
   // ── 열 너비 드래그(헤더 우측 경계) ────────────────────────────────────
-  function startColumnResize(key: WorksheetColumnKey, e: React.PointerEvent) {
+  function startColumnResize(key: string, e: React.PointerEvent) {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    const startW = layoutRef.current.widths[key] ?? DEFAULT_COLUMN_WIDTHS[key];
+    const startW =
+      layoutRef.current.widths[key] ??
+      (key.startsWith("sub_detail_")
+        ? 200
+        : DEFAULT_COLUMN_WIDTHS[key as WorksheetColumnKey]);
     let latest = layoutRef.current;
     function move(ev: PointerEvent) {
       const width = clampWidth(startW + (ev.clientX - startX));
@@ -426,7 +430,7 @@ export function WorksheetTable({
             {columnsToRender.map((colKey) => {
               const isSubDetail = colKey.startsWith("sub_detail_");
               const width = isSubDetail
-                ? 200
+                ? (layout.widths[colKey] ?? 200)
                 : (layout.widths[colKey as WorksheetColumnKey] ?? DEFAULT_COLUMN_WIDTHS[colKey as WorksheetColumnKey]);
               return (
                 <col
@@ -437,7 +441,7 @@ export function WorksheetTable({
             })}
           </colgroup>
           <thead>
-            <tr className="sticky top-0 z-10 bg-zinc-100 text-left dark:bg-zinc-900">
+            <tr className="sticky top-0 z-30 bg-zinc-100 text-left dark:bg-zinc-900">
               <th className="border border-zinc-200 px-1 py-2 text-center dark:border-zinc-800">
                 <input
                   type="checkbox"
@@ -467,6 +471,13 @@ export function WorksheetTable({
                           ✕
                         </button>
                       </div>
+
+                      {/* 열 너비 조절 핸들 */}
+                      <span
+                        onPointerDown={(e) => startColumnResize(colKey, e)}
+                        title="드래그하여 열 너비 조절"
+                        className="absolute -right-0.5 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-zinc-300 dark:hover:bg-zinc-600"
+                      />
                     </th>
                   );
                 }

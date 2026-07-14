@@ -15,5 +15,5 @@ export type ColumnMapping = {
   studentNo: number | null;
   studentName: number | null;
   submissionId: number | null;
-  content: number | null;
+  content: Array<{ index: number; label: string }>;
 };

@@ -95,6 +95,16 @@ test("normalizeWorksheetLayout: 유효 sort 보존", () => {
   assert.deepEqual(l.sort, { key: "score", dir: "desc" });
 });
 
+test("normalizeWorksheetLayout: sub_detail_ 열 너비 보존", () => {
+  const raw = {
+    widths: { sub_detail_1: 250, score: 100, invalid_col: 300 }
+  };
+  const l = normalizeWorksheetLayout(raw, []);
+  assert.equal(l.widths.sub_detail_1, 250);
+  assert.equal(l.widths.score, 100);
+  assert.equal("invalid_col" in l.widths, false);
+});
+
 test("applySort: sort=null이면 원본 유지", () => {
   const rows = [row({ studentId: "a", name: "가" }), row({ studentId: "b", name: "나" })];
   assert.equal(applySort(rows, null), rows);

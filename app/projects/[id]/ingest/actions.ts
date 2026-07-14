@@ -332,32 +332,43 @@ export async function ingestOneFile(
       const cell = (row: string[], idx: number | null) =>
         idx != null ? (row[idx] ?? "").trim() : "";
 
+      const contentItems = Array.isArray(mapping.content)
+        ? mapping.content
+        : typeof mapping.content === "number"
+          ? [{ index: mapping.content, label: filename }]
+          : [];
+
       for (let i = 0; i < data.rows.length; i++) {
         const row = data.rows[i];
         const rawStudentNo = cell(row, mapping.studentNo) || null;
         const rawStudentName = cell(row, mapping.studentName) || null;
         const submissionId = cell(row, mapping.submissionId);
-        const content = cell(row, mapping.content);
-        if (!content) continue; // 내용이 없는 행은 제출물로 만들지 않는다.
 
-        const submissionKey = submissionId || `${filename}#row${i + 1}`;
-        try {
-          const result = await persistSubmission(supabase, {
-            projectId,
-            submissionKey,
-            rawStudentNo,
-            rawStudentName,
-            sourceFilename: filename,
-            storagePath: path,
-            sourceType,
-            text: content,
-          });
-          tally(summary, result);
-        } catch (e) {
-          summary.errors.push({
-            filename: `${filename} (${i + 1}행)`,
-            message: e instanceof Error ? e.message : "알 수 없는 오류",
-          });
+        for (const colItem of contentItems) {
+          const colIdx = colItem.index;
+          const colLabel = colItem.label || `열 ${colIdx}`;
+          const content = (row[colIdx] ?? "").trim();
+          if (!content) continue; // 내용이 없는 행은 제출물로 만들지 않는다.
+
+          const submissionKey = `${colLabel}::${submissionId || `${filename}#row${i + 1}`}`;
+          try {
+            const result = await persistSubmission(supabase, {
+              projectId,
+              submissionKey,
+              rawStudentNo,
+              rawStudentName,
+              sourceFilename: filename,
+              storagePath: path,
+              sourceType,
+              text: content,
+            });
+            tally(summary, result);
+          } catch (e) {
+            summary.errors.push({
+              filename: `${filename} (${i + 1}행 · ${colLabel})`,
+              message: e instanceof Error ? e.message : "알 수 없는 오류",
+            });
+          }
         }
       }
       const errPart =
@@ -453,11 +464,15 @@ function heuristicMapping(headers: string[]): ColumnMapping {
     );
     return i >= 0 ? i : null;
   };
+  const contentIdx = find(["내용", "답안", "응답", "본문", "content", "text"]);
   return {
     studentNo: find(["학번", "번호", "student", "no"]),
     studentName: find(["이름", "성명", "name"]),
     submissionId: find(["제출물", "과제", "id", "번호"]),
-    content: find(["내용", "답안", "응답", "본문", "content", "text"]),
+    content:
+      contentIdx !== null
+        ? [{ index: contentIdx, label: headers[contentIdx] || `열 ${contentIdx}` }]
+        : [],
   };
 }
 
@@ -487,11 +502,15 @@ async function suggestMapping(
   const match = res.text.match(/\{[\s\S]*\}/);
   if (!match) throw new Error("추천 파싱 실패");
   const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+  const contentIdx = clampIndex(parsed.content, headers.length);
   return {
     studentNo: clampIndex(parsed.studentNo, headers.length),
     studentName: clampIndex(parsed.studentName, headers.length),
     submissionId: clampIndex(parsed.submissionId, headers.length),
-    content: clampIndex(parsed.content, headers.length),
+    content:
+      contentIdx !== null
+        ? [{ index: contentIdx, label: headers[contentIdx] || `열 ${contentIdx}` }]
+        : [],
   };
 }
 

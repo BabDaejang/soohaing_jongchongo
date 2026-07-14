@@ -20,6 +20,7 @@ export type SubmissionRaw = {
   submission_key: string | null;
   authenticity_status: AuthenticityStatus;
   content_text?: string | null;
+  source_type?: string | null;
 };
 export type ScoreRaw = {
   student_id: string;
@@ -41,7 +42,12 @@ export function assembleWorksheetRows(input: {
   const subsByStudent = new Map<string, WorksheetSubmission[]>();
   for (const s of input.submissions) {
     if (!s.student_id) continue; // 귀속분(student_id NOT NULL)만
-    const title = s.source_filename ?? s.submission_key ?? s.id.slice(0, 8);
+    
+    let title = s.source_filename ?? s.submission_key ?? s.id.slice(0, 8);
+    if ((s.source_type === "xlsx" || s.source_type === "csv") && s.submission_key?.includes("::")) {
+      title = s.submission_key.split("::")[0];
+    }
+    
     const entry: WorksheetSubmission = {
       id: s.id,
       title,
