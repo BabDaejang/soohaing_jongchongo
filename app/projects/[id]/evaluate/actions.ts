@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireProjectOwner } from "@/lib/projects";
+import { requireApproved } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { callLLM } from "@/lib/llm";
 import type { ModelRouting, ModelTarget } from "@/lib/llm";
@@ -117,6 +118,7 @@ function parseEvalScores(
 export type RecomputeResult = {
   ranked: number; // 확정 시 student_scores에 기록된 학생 수(미확정이면 0)
   pendingConfirm: { scored: number; required: number } | null; // 미확정 국면 정보
+  respread: boolean; // 추가: 공간 소진으로 전체 재배치가 일어남
 };
 
 async function recomputeAndSave(
@@ -217,7 +219,7 @@ async function recomputeAndSave(
     )
     .map((r) => ({ studentId: r.studentId, raw: r.composite }));
 
-  const { displays, confirmed } = assignDisplayScores({
+  const { displays, confirmed, respread } = assignDisplayScores({
     rawRanked,
     existing,
     totalTargets,
@@ -233,7 +235,24 @@ async function recomputeAndSave(
         scored: rawRanked.length,
         required: initialConfirmCount(totalTargets),
       },
+      respread: false,
     };
+  }
+
+  if (respread) {
+    const { userId } = await requireApproved();
+    await writeAuditLog({
+      actorId: userId,
+      action: "score.respread",
+      entity: "projects",
+      entityId: projectId,
+      detail: {
+        total_targets: totalTargets,
+        ranked_count: rawRanked.length,
+        prior_assigned_count: existing.size,
+      },
+    });
+    console.warn("⚠ 표시 점수 전체 재배치 발생(원인 계측용 — DECISIONS 참조)");
   }
 
   // 확정: effective = override ?? display. override만 있고 평가 없는 학생은 display=null.
@@ -269,7 +288,7 @@ async function recomputeAndSave(
   }
 
   await admin.from("projects").update({ needs_recalc: false }).eq("id", projectId);
-  return { ranked: withDisplay.length, pendingConfirm: null };
+  return { ranked: withDisplay.length, pendingConfirm: null, respread };
 }
 
 // ── 평가 실행 — 클라이언트 구동 1건 단위(prepare → evaluateOne × N → finalize) ──

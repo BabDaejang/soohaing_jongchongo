@@ -64,6 +64,7 @@ export function Phase2Panel({
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [scheme, setScheme] = useState<GradingScheme>(gradingScheme);
+  const [concurrency, setConcurrency] = useState(2);
   const [, startScheme] = useTransition();
 
   // S1 (식별)
@@ -230,7 +231,7 @@ export function Phase2Panel({
       failed: number;
       aborted: boolean;
     }) => {
-      const { ranked, pendingConfirm } = await finalizeEvaluation(
+      const { ranked, pendingConfirm, respread } = await finalizeEvaluation(
         projectId,
         { scored: succeeded, failed, skipped: skippedRef.current },
         aborted,
@@ -239,9 +240,12 @@ export function Phase2Panel({
       // 확정 표시 점수·등급은 finalize 재계산 후 나온다 — 재계산 후 한 번 더 갱신한다.
       emitWorksheetRefresh();
       router.refresh();
-      return pendingConfirm
+      const baseMsg = pendingConfirm
         ? `채점 ${pendingConfirm.scored}/${pendingConfirm.required}명 — 표시 점수 확정 대기(최소 ${pendingConfirm.required}명 채점 후 확정)`
         : `재계산 — ${ranked}명 순위 산출`;
+      return respread
+        ? `${baseMsg}\n⚠ 표시 점수 전체 재배치 발생 — 기존 배정이 재스프레드되었습니다(빈도 계측 중)`
+        : baseMsg;
     },
     [projectId, router],
   );
@@ -268,6 +272,7 @@ export function Phase2Panel({
       stepOne: s1StepOne,
       finalize: s1Finalize,
       nextStage: nextStage1To2,
+      concurrency,
     });
 
   const running =
@@ -278,11 +283,14 @@ export function Phase2Panel({
     setMsg(null);
     startRecalc(async () => {
       try {
-        const { ranked, pendingConfirm } = await recalculate(projectId);
+        const { ranked, pendingConfirm, respread } = await recalculate(projectId);
+        const baseMsg = pendingConfirm
+          ? `채점 ${pendingConfirm.scored}/${pendingConfirm.required}명 — 표시 점수 확정 대기(최소 ${pendingConfirm.required}명 채점 후 확정)`
+          : `재계산 완료 — ${ranked}명 순위 산출`;
         setMsg(
-          pendingConfirm
-            ? `채점 ${pendingConfirm.scored}/${pendingConfirm.required}명 — 표시 점수 확정 대기(최소 ${pendingConfirm.required}명 채점 후 확정)`
-            : `재계산 완료 — ${ranked}명 순위 산출`,
+          respread
+            ? `${baseMsg}\n⚠ 표시 점수 전체 재배치 발생 — 기존 배정이 재스프레드되었습니다(빈도 계측 중)`
+            : baseMsg,
         );
         emitWorksheetRefresh();
         router.refresh();
@@ -333,23 +341,46 @@ export function Phase2Panel({
           </Link>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={start}
-            disabled={running || recalcPending}
-            className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
-          >
-            {running ? "실행 중…" : "채점 실행"}
-          </button>
-          <button
-            type="button"
-            onClick={recalc}
-            disabled={recalcPending || running}
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
-          >
-            재계산
-          </button>
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={start}
+              disabled={running || recalcPending}
+              className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+            >
+              {running ? "실행 중…" : "채점 실행"}
+            </button>
+            <button
+              type="button"
+              onClick={recalc}
+              disabled={recalcPending || running}
+              className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            >
+              재계산
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs">
+            <label htmlFor="concurrency-select" className="text-zinc-500 font-medium">
+              동시 처리:
+            </label>
+            <select
+              id="concurrency-select"
+              value={concurrency}
+              onChange={(e) => setConcurrency(Number(e.target.value))}
+              disabled={running}
+              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+            >
+              <option value={1}>1건씩</option>
+              <option value={2}>2건씩 (기본)</option>
+              <option value={3}>3건씩</option>
+            </select>
+            <span className="text-[11px] text-zinc-400">
+              (API 키 등급이 낮아 요청 제한(429)이 잦으면 1건을 권장합니다)
+            </span>
+          </div>
+
           {needsRecalc && (
             <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400">
               ● 재계산 필요
