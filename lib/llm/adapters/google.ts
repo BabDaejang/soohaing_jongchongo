@@ -1,6 +1,7 @@
 import "server-only";
 import type { Adapter } from "../types";
 import { contentToText, toGoogleContent } from "../content";
+import { LLMHttpError } from "../errors";
 
 // Google Gemini generateContent API
 // (POST {baseUrl}/v1beta/models/{model}:generateContent?key=...).
@@ -40,7 +41,7 @@ export const googleAdapter: Adapter = async ({
   });
 
   if (!res.ok) {
-    throw new Error(`Google API 오류 (${res.status}): ${await res.text()}`);
+    throw new LLMHttpError(res.status, `Google API 오류 (${res.status}): ${await res.text()}`);
   }
 
   const data = (await res.json()) as {

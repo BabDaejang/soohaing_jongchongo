@@ -1,6 +1,7 @@
 import "server-only";
 import type { Adapter } from "../types";
 import { toOpenAIContent } from "../content";
+import { LLMHttpError } from "../errors";
 
 // gpt-5·o 계열(추론 모델)은 legacy 파라미터를 거부한다 (2026-07-11 탐침 확정):
 //   max_tokens → 400 "Use 'max_completion_tokens' instead"
@@ -53,7 +54,7 @@ export const openaiAdapter: Adapter = async ({
   });
 
   if (!res.ok) {
-    throw new Error(`OpenAI 호환 API 오류 (${res.status}): ${await res.text()}`);
+    throw new LLMHttpError(res.status, `OpenAI 호환 API 오류 (${res.status}): ${await res.text()}`);
   }
 
   const data = (await res.json()) as {

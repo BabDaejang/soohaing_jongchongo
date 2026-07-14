@@ -1,6 +1,7 @@
 import "server-only";
 import type { Adapter } from "../types";
 import { contentToText, toAnthropicContent } from "../content";
+import { LLMHttpError } from "../errors";
 
 // Anthropic Messages API (POST {baseUrl}/v1/messages).
 // system 역할 메시지는 최상위 system 필드로, 나머지는 messages 배열로 보낸다.
@@ -40,7 +41,7 @@ export const anthropicAdapter: Adapter = async ({
   });
 
   if (!res.ok) {
-    throw new Error(`Anthropic API 오류 (${res.status}): ${await res.text()}`);
+    throw new LLMHttpError(res.status, `Anthropic API 오류 (${res.status}): ${await res.text()}`);
   }
 
   const data = (await res.json()) as {
