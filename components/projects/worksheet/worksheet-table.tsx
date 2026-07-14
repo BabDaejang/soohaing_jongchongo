@@ -97,7 +97,8 @@ export function WorksheetTable({
   );
   const [filters, setFilters] = useState<Filters>({}); // 세션 상태만(레이아웃에 저장 안 함)
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [expanded, setExpanded] = useState<Set<string>>(new Set()); // 제출물 목록 펼침
+  const [expandedSubmissionStudentId, setExpandedSubmissionStudentId] = useState<string | null>(null);
+  const [expandedCells, setExpandedCells] = useState<Set<string>>(new Set());
   const [studentModal, setStudentModal] = useState<StudentModalState>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [openMenu, setOpenMenu] = useState<WorksheetColumnKey | null>(null);
@@ -163,6 +164,36 @@ export function WorksheetTable({
     [layout.hidden],
   );
 
+  const expandedStudent = useMemo(() => {
+    if (!expandedSubmissionStudentId) return null;
+    return rows.find((r) => r.studentId === expandedSubmissionStudentId) ?? null;
+  }, [rows, expandedSubmissionStudentId]);
+
+  const expandedCols = useMemo(() => {
+    if (!expandedStudent) return [];
+    return expandedStudent.submissions.map((sub, index) => ({
+      key: `sub_detail_${sub.id}`,
+      subId: sub.id,
+      title: sub.title,
+      studentId: expandedStudent.studentId,
+      contentText: sub.contentText,
+      index,
+    }));
+  }, [expandedStudent]);
+
+  const columnsToRender = useMemo(() => {
+    const list: string[] = [];
+    for (const col of visibleColumns) {
+      list.push(col);
+      if (col === "submission_count" && expandedCols.length > 0) {
+        for (const ec of expandedCols) {
+          list.push(ec.key);
+        }
+      }
+    }
+    return list;
+  }, [visibleColumns, expandedCols]);
+
   // ── 열 정렬/감춤 ──────────────────────────────────────────────────────
   function setSort(sort: WorksheetSort) {
     commit({ ...layoutRef.current, sort });
@@ -179,16 +210,17 @@ export function WorksheetTable({
   function toggleCollapsed() {
     const next = !layoutRef.current.allCollapsed;
     commit({ ...layoutRef.current, allCollapsed: next });
-    if (next) setExpanded(new Set()); // 전체 접기는 제출물 확장 서브행도 모두 닫는다.
+    if (next) {
+      setExpandedSubmissionStudentId(null);
+      setExpandedCells(new Set());
+    }
   }
 
-  // ── 제출물 목록 펼침(갯수 셀) ─────────────────────────────────────────
-  function toggleExpand(studentId: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(studentId)) next.delete(studentId);
-      else next.add(studentId);
-      return next;
+  function showColumn(key: WorksheetColumnKey) {
+    if (!layoutRef.current.hidden.includes(key)) return;
+    commit({
+      ...layoutRef.current,
+      hidden: layoutRef.current.hidden.filter((k) => k !== key),
     });
   }
 
@@ -391,12 +423,18 @@ export function WorksheetTable({
         <table className="w-full table-fixed border-collapse text-sm">
           <colgroup>
             <col style={{ width: 38 }} />
-            {visibleColumns.map((key) => (
-              <col
-                key={key}
-                style={{ width: layout.widths[key] ?? DEFAULT_COLUMN_WIDTHS[key] }}
-              />
-            ))}
+            {columnsToRender.map((colKey) => {
+              const isSubDetail = colKey.startsWith("sub_detail_");
+              const width = isSubDetail
+                ? 200
+                : (layout.widths[colKey as WorksheetColumnKey] ?? DEFAULT_COLUMN_WIDTHS[colKey as WorksheetColumnKey]);
+              return (
+                <col
+                  key={colKey}
+                  style={{ width }}
+                />
+              );
+            })}
           </colgroup>
           <thead>
             <tr className="sticky top-0 z-10 bg-zinc-100 text-left dark:bg-zinc-900">
@@ -408,33 +446,74 @@ export function WorksheetTable({
                   aria-label="전체 선택"
                 />
               </th>
-              {visibleColumns.map((key) => (
-                <HeaderCell
-                  key={key}
-                  columnKey={key}
-                  sort={layout.sort}
-                  open={openMenu === key}
-                  filterable={FILTERABLE_COLUMNS.includes(key)}
-                  filterValues={
-                    FILTERABLE_COLUMNS.includes(key) ? uniqueValues(rows, key) : []
-                  }
-                  selectedFilter={filters[key] ?? []}
-                  onToggleMenu={() =>
-                    setOpenMenu((v) => (v === key ? null : key))
-                  }
-                  onSort={setSort}
-                  onHide={() => hideColumn(key)}
-                  onFilter={(vals) => setColumnFilter(key, vals)}
-                  onResizeStart={(e) => startColumnResize(key, e)}
-                />
-              ))}
+              {columnsToRender.map((colKey) => {
+                if (colKey.startsWith("sub_detail_")) {
+                  const ec = expandedCols.find((c) => c.key === colKey);
+                  return (
+                    <th
+                      key={colKey}
+                      className="relative border border-zinc-200 bg-zinc-50 px-2 py-2 font-medium text-zinc-700 dark:border-zinc-800 dark:bg-zinc-900/60 dark:text-zinc-300"
+                    >
+                      <div className="flex items-center justify-between gap-1">
+                        <span className="truncate" title={ec?.title}>
+                          {ec?.title}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setExpandedSubmissionStudentId(null)}
+                          className="shrink-0 rounded px-1 text-xs text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 font-bold"
+                          title="제출물 열 모두 접기"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </th>
+                  );
+                }
+
+                const key = colKey as WorksheetColumnKey;
+                const idx = visibleColumns.indexOf(key);
+                const hiddenAfter = WORKSHEET_COLUMNS.slice(WORKSHEET_COLUMNS.indexOf(key) + 1, 
+                  idx < visibleColumns.length - 1 
+                    ? WORKSHEET_COLUMNS.indexOf(visibleColumns[idx + 1]) 
+                    : WORKSHEET_COLUMNS.length
+                ).filter((k) => layout.hidden.includes(k));
+
+                const hiddenBefore = idx === 0 
+                  ? WORKSHEET_COLUMNS.slice(0, WORKSHEET_COLUMNS.indexOf(key)).filter((k) => layout.hidden.includes(k))
+                  : [];
+
+                return (
+                  <HeaderCell
+                    key={key}
+                    columnKey={key}
+                    sort={layout.sort}
+                    open={openMenu === key}
+                    filterable={FILTERABLE_COLUMNS.includes(key)}
+                    filterValues={
+                      FILTERABLE_COLUMNS.includes(key) ? uniqueValues(rows, key) : []
+                    }
+                    selectedFilter={filters[key] ?? []}
+                    onToggleMenu={() =>
+                      setOpenMenu((v) => (v === key ? null : key))
+                    }
+                    onSort={setSort}
+                    onHide={() => hideColumn(key)}
+                    onFilter={(vals) => setColumnFilter(key, vals)}
+                    onResizeStart={(e) => startColumnResize(key, e)}
+                    hiddenAfter={hiddenAfter}
+                    hiddenBefore={hiddenBefore}
+                    onShowColumn={showColumn}
+                  />
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {visibleRows.length === 0 ? (
               <tr>
                 <td
-                  colSpan={visibleColumns.length + 1}
+                  colSpan={columnsToRender.length + 1}
                   className="border border-zinc-200 px-3 py-8 text-center text-sm text-zinc-500 dark:border-zinc-800"
                 >
                   {rows.length === 0
@@ -449,15 +528,18 @@ export function WorksheetTable({
                   projectId={projectId}
                   countMethod={countMethod}
                   row={row}
-                  columns={visibleColumns}
+                  columns={columnsToRender}
                   collapsed={collapsed}
                   rowHeight={layout.rowHeights[row.studentId]}
                   selected={selected.has(row.studentId)}
-                  expanded={expanded.has(row.studentId)}
                   onToggle={() => toggleRow(row.studentId)}
-                  onToggleExpand={() => toggleExpand(row.studentId)}
                   onEditStudent={() => setStudentModal({ mode: "edit", row })}
                   onRowResizeStart={(e) => startRowResize(row.studentId, e)}
+                  expandedSubmissionStudentId={expandedSubmissionStudentId}
+                  setExpandedSubmissionStudentId={setExpandedSubmissionStudentId}
+                  expandedCols={expandedCols}
+                  expandedCells={expandedCells}
+                  setExpandedCells={setExpandedCells}
                 />
               ))
             )}
@@ -501,6 +583,9 @@ function HeaderCell({
   onHide,
   onFilter,
   onResizeStart,
+  hiddenAfter,
+  hiddenBefore,
+  onShowColumn,
 }: {
   columnKey: WorksheetColumnKey;
   sort: WorksheetSort;
@@ -513,6 +598,9 @@ function HeaderCell({
   onHide: () => void;
   onFilter: (values: string[]) => void;
   onResizeStart: (e: React.PointerEvent) => void;
+  hiddenAfter: WorksheetColumnKey[];
+  hiddenBefore: WorksheetColumnKey[];
+  onShowColumn: (key: WorksheetColumnKey) => void;
 }) {
   const active = sort?.key === columnKey ? sort.dir : null;
   const filtering = selectedFilter.length > 0;
@@ -606,6 +694,46 @@ function HeaderCell({
         title="드래그하여 열 너비 조절"
         className="absolute -right-0.5 top-0 z-10 h-full w-1.5 cursor-col-resize hover:bg-zinc-300 dark:hover:bg-zinc-600"
       />
+
+      {/* 감춘 열 보이기 버튼 (오른쪽 경계선) */}
+      {hiddenAfter && hiddenAfter.length > 0 && (
+        <div
+          className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-1/2 z-20 flex gap-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {hiddenAfter.map((hKey) => (
+            <button
+              key={hKey}
+              type="button"
+              onClick={() => onShowColumn(hKey)}
+              title={`${COLUMN_LABELS[hKey]} 열 보이기`}
+              className="w-4 h-4 bg-zinc-800 hover:bg-zinc-700 text-white dark:bg-zinc-200 dark:hover:bg-white dark:text-zinc-900 border border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-[10px] font-bold shadow-md rounded cursor-pointer shrink-0"
+            >
+              +
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* 감춘 열 보이기 버튼 (첫 열 왼쪽 경계선) */}
+      {hiddenBefore && hiddenBefore.length > 0 && (
+        <div
+          className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-1/2 z-20 flex gap-0.5"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {hiddenBefore.map((hKey) => (
+            <button
+              key={hKey}
+              type="button"
+              onClick={() => onShowColumn(hKey)}
+              title={`${COLUMN_LABELS[hKey]} 열 보이기`}
+              className="w-4 h-4 bg-zinc-800 hover:bg-zinc-700 text-white dark:bg-zinc-200 dark:hover:bg-white dark:text-zinc-900 border border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-[10px] font-bold shadow-md rounded cursor-pointer shrink-0"
+            >
+              +
+            </button>
+          ))}
+        </div>
+      )}
     </th>
   );
 }
@@ -629,6 +757,7 @@ function MenuItem({
 }
 
 // ── 행(메인 행 + 제출물 확장 서브행) ──────────────────────────────────────
+// ── 행(메인 행) ──────────────────────────────────────
 function WorksheetRowView({
   projectId,
   countMethod,
@@ -637,24 +766,37 @@ function WorksheetRowView({
   collapsed,
   rowHeight,
   selected,
-  expanded,
   onToggle,
-  onToggleExpand,
   onEditStudent,
   onRowResizeStart,
+  expandedSubmissionStudentId,
+  setExpandedSubmissionStudentId,
+  expandedCols,
+  expandedCells,
+  setExpandedCells,
 }: {
   projectId: string;
   countMethod: CountMethod;
   row: WorksheetRow;
-  columns: WorksheetColumnKey[];
+  columns: string[];
   collapsed: boolean;
   rowHeight: number | undefined;
   selected: boolean;
-  expanded: boolean;
   onToggle: () => void;
-  onToggleExpand: () => void;
   onEditStudent: () => void;
   onRowResizeStart: (e: React.PointerEvent) => void;
+  expandedSubmissionStudentId: string | null;
+  setExpandedSubmissionStudentId: (id: string | null) => void;
+  expandedCols: {
+    key: string;
+    subId: string;
+    title: string;
+    studentId: string;
+    contentText: string;
+    index: number;
+  }[];
+  expandedCells: Set<string>;
+  setExpandedCells: React.Dispatch<React.SetStateAction<Set<string>>>;
 }) {
   return (
     <>
@@ -673,46 +815,33 @@ function WorksheetRowView({
             className="absolute -bottom-0.5 left-0 z-10 h-1.5 w-full cursor-row-resize hover:bg-zinc-300 dark:hover:bg-zinc-600"
           />
         </td>
-        {columns.map((key) => (
-          <td
-            key={key}
-            className="border border-zinc-200 px-2 py-1 dark:border-zinc-800"
-          >
-            <Cell
-              projectId={projectId}
-              countMethod={countMethod}
-              row={row}
-              columnKey={key}
-              collapsed={collapsed}
-              rowHeight={rowHeight}
-              expanded={expanded}
-              onToggleExpand={onToggleExpand}
-              onEditStudent={onEditStudent}
-            />
-          </td>
-        ))}
+        {columns.map((key) => {
+          const isSubDetail = key.startsWith("sub_detail_");
+          return (
+            <td
+              key={key}
+              className={`border border-zinc-200 px-2 py-1 dark:border-zinc-800 ${
+                isSubDetail ? "bg-zinc-50/50 dark:bg-zinc-900/20" : ""
+              }`}
+            >
+              <Cell
+                projectId={projectId}
+                countMethod={countMethod}
+                row={row}
+                columnKey={key}
+                collapsed={collapsed}
+                rowHeight={rowHeight}
+                onEditStudent={onEditStudent}
+                expandedSubmissionStudentId={expandedSubmissionStudentId}
+                setExpandedSubmissionStudentId={setExpandedSubmissionStudentId}
+                expandedCols={expandedCols}
+                expandedCells={expandedCells}
+                setExpandedCells={setExpandedCells}
+              />
+            </td>
+          );
+        })}
       </tr>
-      {expanded && (
-        <tr className="bg-zinc-50 dark:bg-zinc-900/40">
-          <td
-            colSpan={columns.length + 1}
-            className="border border-zinc-200 px-4 py-2 text-sm dark:border-zinc-800"
-          >
-            {row.submissions.length === 0 ? (
-              <span className="text-zinc-400">귀속된 제출물이 없습니다.</span>
-            ) : (
-              <ul className="flex flex-col gap-0.5">
-                {row.submissions.map((s) => (
-                  <li key={s.id} className="flex items-center" title={s.id}>
-                    <span className="truncate">· {s.title}</span>
-                    <AuthenticityBadge status={s.authenticityStatus} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </td>
-        </tr>
-      )}
     </>
   );
 }
@@ -724,20 +853,72 @@ function Cell({
   columnKey,
   collapsed,
   rowHeight,
-  expanded,
-  onToggleExpand,
   onEditStudent,
+  expandedSubmissionStudentId,
+  setExpandedSubmissionStudentId,
+  expandedCols,
+  expandedCells,
+  setExpandedCells,
 }: {
   projectId: string;
   countMethod: CountMethod;
   row: WorksheetRow;
-  columnKey: WorksheetColumnKey;
+  columnKey: string;
   collapsed: boolean;
   rowHeight: number | undefined;
-  expanded: boolean;
-  onToggleExpand: () => void;
   onEditStudent: () => void;
+  expandedSubmissionStudentId: string | null;
+  setExpandedSubmissionStudentId: (id: string | null) => void;
+  expandedCols: {
+    key: string;
+    subId: string;
+    title: string;
+    studentId: string;
+    contentText: string;
+    index: number;
+  }[];
+  expandedCells: Set<string>;
+  setExpandedCells: React.Dispatch<React.SetStateAction<Set<string>>>;
 }) {
+  if (columnKey.startsWith("sub_detail_")) {
+    const ec = expandedCols.find((c) => c.key === columnKey);
+    if (!ec) return null;
+    
+    // Find this student's submission at this index
+    const targetSub = row.submissions[ec.index];
+    if (!targetSub) {
+      return <span className="text-zinc-300 dark:text-zinc-700">—</span>;
+    }
+
+    const isExpandedStudent = row.studentId === expandedSubmissionStudentId;
+    const cellKey = `${row.studentId}_${targetSub.id}`;
+    const isCellExpanded = isExpandedStudent || expandedCells.has(cellKey);
+
+    const toggleCell = () => {
+      if (isExpandedStudent) return;
+      setExpandedCells((prev) => {
+        const next = new Set(prev);
+        if (next.has(cellKey)) next.delete(cellKey);
+        else next.add(cellKey);
+        return next;
+      });
+    };
+
+    return (
+      <div 
+        onClick={toggleCell}
+        className={isExpandedStudent ? "" : "cursor-pointer"}
+        title={isExpandedStudent ? undefined : "클릭하여 펼치기/접기"}
+      >
+        <TextCell
+          text={targetSub.contentText}
+          collapsed={!isCellExpanded}
+          rowHeight={rowHeight}
+        />
+      </div>
+    );
+  }
+
   switch (columnKey) {
     case "internal_id":
       // 제품 부여 고유 번호 — 어디서도 편집 불가.
@@ -769,16 +950,23 @@ function Cell({
         </button>
       );
     case "submission_count":
+      const isCurrentlyExpanded = expandedSubmissionStudentId === row.studentId;
       return row.submissionCount === 0 ? (
         <EmptyCellButton anchor="phase-1" label="수합하기" />
       ) : (
         <button
           type="button"
-          onClick={onToggleExpand}
-          className="inline-flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-100"
-          title="제출물 목록 펼치기"
+          onClick={() => {
+            if (isCurrentlyExpanded) {
+              setExpandedSubmissionStudentId(null);
+            } else {
+              setExpandedSubmissionStudentId(row.studentId);
+            }
+          }}
+          className="inline-flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-100 font-semibold"
+          title="제출물 텍스트 가로 펼치기"
         >
-          <span className="text-xs text-zinc-400">{expanded ? "▾" : "▸"}</span>
+          <span className="text-xs text-zinc-400">{isCurrentlyExpanded ? "◂" : "▸"}</span>
           {row.submissionCount}
         </button>
       );

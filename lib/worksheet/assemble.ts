@@ -19,6 +19,7 @@ export type SubmissionRaw = {
   source_filename: string | null;
   submission_key: string | null;
   authenticity_status: AuthenticityStatus;
+  content_text?: string | null;
 };
 export type ScoreRaw = {
   student_id: string;
@@ -45,6 +46,7 @@ export function assembleWorksheetRows(input: {
       id: s.id,
       title,
       authenticityStatus: s.authenticity_status,
+      contentText: s.content_text ?? "",
     };
     const list = subsByStudent.get(s.student_id);
     if (list) list.push(entry);

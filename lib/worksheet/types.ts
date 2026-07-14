@@ -33,6 +33,7 @@ export type WorksheetSubmission = {
   id: string;
   title: string;
   authenticityStatus: AuthenticityStatus;
+  contentText: string;
 };
 
 export type WorksheetRow = {
