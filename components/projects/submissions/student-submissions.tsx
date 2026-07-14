@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   addManualSubmission,
@@ -10,9 +10,9 @@ import {
   reassignSubmission,
   toggleInclude,
   updateSubmissionText,
+  deleteSubmissionsByFile,
 } from "@/app/projects/[id]/submissions/actions";
 import { AuthenticityBadge } from "@/components/projects/authenticity-badge";
-import type { Finding } from "@/lib/factsheet/authenticity";
 import type {
   AuthenticityStatus,
   IdentitySource,
@@ -35,49 +35,8 @@ export type SubRow = {
   storage_path: string | null;
   extraction_approved_at: string | null;
   authenticity_status: AuthenticityStatus;
-  authenticity: unknown; // { claim, urls, findings, factsheet_id, model, checked_at, content_hash }
+  authenticity: unknown;
 };
-
-// 진실성 리포트(authenticity jsonb)에서 findings·출처 요약을 안전하게 뽑는다.
-type AuthReport = { claim?: { title?: string | null }; findings?: Finding[] };
-function readAuthReport(raw: unknown): AuthReport {
-  return raw && typeof raw === "object" ? (raw as AuthReport) : {};
-}
-
-const VERDICT_LABEL: Record<Finding["verdict"], string> = {
-  supported: "부합",
-  contradicted: "모순",
-  not_found: "근거 없음",
-};
-
-const METHOD_LABEL: Record<MatchMethod, string> = {
-  auto_number: "학번 자동",
-  auto_name: "이름 자동",
-  auto_new_number: "신규 학번 자동",
-  confirmed_existing: "교사 확정",
-  confirmed_new: "교사 신규",
-  manual: "수동 입력",
-  reassigned: "교사 재귀속",
-};
-
-// 자동 귀속의 근거를 교사가 훑어볼 수 있도록 식별값 출처를 함께 보여준다 (SPEC 5.2).
-const SOURCE_LABEL: Record<IdentitySource, string> = {
-  column: "열",
-  filename: "파일명",
-  llm: "LLM 추정",
-};
-
-// LLM 추정으로 자동 귀속된 건은 눈에 띄게 — 가장 검토가 필요한 경로다.
-const AUTO_METHODS: ReadonlySet<MatchMethod> = new Set([
-  "auto_number",
-  "auto_name",
-  "auto_new_number",
-]);
-
-const inputClass =
-  "rounded-md border border-zinc-300 bg-white px-2 py-1.5 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100";
-const ghostBtn =
-  "rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800";
 
 export function StudentSubmissions({
   projectId,
@@ -88,382 +47,473 @@ export function StudentSubmissions({
   students: StudentOpt[];
   submissions: SubRow[];
 }) {
-  const byStudent = new Map<string, SubRow[]>();
+  const router = useRouter();
+  const [pending, start] = useTransition();
+  const [manualAddStudentId, setManualAddStudentId] = useState<string | null>(null);
+  const [manualText, setManualText] = useState("");
+  const [error, setError] = useState("");
+
+  // unique source_filenames로 열 구성
+  const filesSet = new Set<string>();
   for (const s of submissions) {
-    if (!s.student_id) continue;
-    const arr = byStudent.get(s.student_id) ?? [];
-    arr.push(s);
-    byStudent.set(s.student_id, arr);
+    if (s.source_filename) {
+      filesSet.add(s.source_filename);
+    }
+  }
+  const fileColumns = Array.from(filesSet).sort();
+
+  // studentId -> filename -> SubRow[] 매핑 구조 생성
+  const subMap = new Map<string, Map<string, SubRow[]>>();
+  for (const s of submissions) {
+    if (!s.student_id || !s.source_filename) continue;
+    if (!subMap.has(s.student_id)) {
+      subMap.set(s.student_id, new Map());
+    }
+    const studentFiles = subMap.get(s.student_id)!;
+    if (!studentFiles.has(s.source_filename)) {
+      studentFiles.set(s.source_filename, []);
+    }
+    studentFiles.get(s.source_filename)!.push(s);
   }
 
-  const withData = students.filter((s) => byStudent.has(s.id));
-  if (withData.length === 0) {
+  const handleAddManual = (studentId: string) => {
+    if (!manualText.trim()) return;
+    start(async () => {
+      setError("");
+      try {
+        await addManualSubmission(projectId, studentId, manualText);
+        setManualText("");
+        setManualAddStudentId(null);
+        router.refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "수동 추가 실패");
+      }
+    });
+  };
+
+  const handleReassign = (subId: string, toStudentId: string) => {
+    start(async () => {
+      setError("");
+      try {
+        await reassignSubmission(projectId, subId, toStudentId);
+        router.refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "귀속 변경 실패");
+      }
+    });
+  };
+
+  const handleDelete = (subId: string) => {
+    start(async () => {
+      setError("");
+      try {
+        await deleteSubmission(projectId, subId);
+        router.refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "삭제 실패");
+      }
+    });
+  };
+
+  const handleUpdateText = async (subId: string, text: string) => {
+    try {
+      await updateSubmissionText(projectId, subId, text);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "텍스트 수정 실패");
+      throw e;
+    }
+  };
+
+  const handleDeleteColumn = (filename: string) => {
+    if (
+      confirm(
+        `'${filename}' 열의 모든 학생 제출물 데이터를 일괄 삭제하시겠습니까?\n(데이터베이스 제출물 레코드가 지워지며 스토리지의 원본 분할 임시 파일도 지워집니다.)`
+      )
+    ) {
+      start(async () => {
+        setError("");
+        try {
+          await deleteSubmissionsByFile(projectId, filename);
+          router.refresh();
+        } catch (e) {
+          setError(e instanceof Error ? e.message : "열 삭제 실패");
+        }
+      });
+    }
+  };
+
+  if (students.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-zinc-300 px-6 py-8 text-center text-sm text-zinc-400 dark:border-zinc-700">
-        아직 학생에 귀속된 제출물이 없습니다. 매칭을 실행하고 확인 큐에서 확정하세요.
+        등록된 학생이 없습니다. 대시보드 페이즈 1에서 명단을 먼저 등록하세요.
       </div>
     );
   }
 
   return (
     <div className="flex flex-col gap-4">
-      {withData.map((student) => (
-        <StudentGroup
-          key={student.id}
-          projectId={projectId}
-          student={student}
-          students={students}
-          rows={byStudent.get(student.id) ?? []}
-        />
-      ))}
-    </div>
-  );
-}
-
-function StudentGroup({
-  projectId,
-  student,
-  students,
-  rows,
-}: {
-  projectId: string;
-  student: StudentOpt;
-  students: StudentOpt[];
-  rows: SubRow[];
-}) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const [adding, setAdding] = useState(false);
-  const [text, setText] = useState("");
-
-  const addManual = () =>
-    start(async () => {
-      await addManualSubmission(projectId, student.id, text);
-      setText("");
-      setAdding(false);
-      router.refresh();
-    });
-
-  return (
-    <div className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-      <div className="mb-3 flex items-center justify-between">
-        <div className="text-sm font-medium">
-          {student.student_number && (
-            <span className="mr-2 font-mono text-zinc-500">{student.student_number}</span>
-          )}
-          {student.name}
-          <span className="ml-2 text-xs text-zinc-400">제출물 {rows.length}</span>
-        </div>
-        <button type="button" onClick={() => setAdding((v) => !v)} className={ghostBtn}>
-          수동 추가
-        </button>
-      </div>
-
-      {adding && (
-        <div className="mb-3 rounded border border-dashed border-zinc-300 p-2 dark:border-zinc-700">
-          <textarea
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            rows={3}
-            placeholder="제출물 내용을 직접 입력"
-            className={`${inputClass} w-full resize-y`}
-          />
-          <div className="mt-2 flex justify-end gap-2">
-            <button type="button" onClick={() => setAdding(false)} className={ghostBtn}>
-              취소
-            </button>
-            <button
-              type="button"
-              disabled={pending || !text.trim()}
-              onClick={addManual}
-              className="rounded-md bg-zinc-800 px-3 py-1 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
-            >
-              추가
-            </button>
-          </div>
-        </div>
-      )}
-
-      <ul className="flex flex-col gap-2">
-        {rows.map((row) => (
-          <SubmissionRow key={row.id} projectId={projectId} row={row} students={students} />
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function SubmissionRow({
-  projectId,
-  row,
-  students,
-}: {
-  projectId: string;
-  row: SubRow;
-  students: StudentOpt[];
-}) {
-  const router = useRouter();
-  const [pending, start] = useTransition();
-  const [expanded, setExpanded] = useState(false);
-  const [editing, setEditing] = useState(false);
-  const [moving, setMoving] = useState(false);
-  const [moveTo, setMoveTo] = useState("");
-  const [text, setText] = useState(row.content_text);
-  const [evalOn, setEvalOn] = useState(row.include_in_eval);
-  const [recordOn, setRecordOn] = useState(row.include_in_record);
-  const [showFindings, setShowFindings] = useState(false);
-  const [error, setError] = useState("");
-
-  // 진실성 근거(의심·판정 불가만 펼침) — 조치는 기존 수단(반영 해제·재귀속·점수 보정)으로 교사가 결정.
-  const findings = readAuthReport(row.authenticity).findings ?? [];
-  const canExpandAuth =
-    (row.authenticity_status === "suspect" ||
-      row.authenticity_status === "unverifiable") &&
-    findings.length > 0;
-
-  const act = (fn: () => Promise<void>, refresh = true) =>
-    start(async () => {
-      setError("");
-      try {
-        await fn();
-        if (refresh) router.refresh();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : "처리 실패");
-      }
-    });
-
-  const approved = !!row.extraction_approved_at;
-
-  return (
-    <li className="rounded border border-zinc-100 p-3 dark:border-zinc-800">
-      <div className="mb-1 flex flex-wrap items-center gap-2 text-xs text-zinc-400">
-        <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">{row.source_type}</span>
-        {row.match_method && (
-          <span
-            className={
-              row.identity_source === "llm" && AUTO_METHODS.has(row.match_method)
-                ? "rounded bg-amber-100 px-1.5 py-0.5 text-amber-800 dark:bg-amber-950 dark:text-amber-300"
-                : ""
-            }
-          >
-            {METHOD_LABEL[row.match_method]}
-            {row.identity_source && ` · ${SOURCE_LABEL[row.identity_source]}`}
-          </span>
-        )}
-        {row.source_filename && <span>{row.source_filename}</span>}
-        {canExpandAuth ? (
-          <button
-            type="button"
-            onClick={() => setShowFindings((v) => !v)}
-            className="inline-flex items-center"
-          >
-            <AuthenticityBadge status={row.authenticity_status} />
-            <span className="ml-1 underline underline-offset-2">
-              {showFindings ? "근거 접기" : "근거 보기"}
-            </span>
-          </button>
-        ) : (
-          <AuthenticityBadge status={row.authenticity_status} />
-        )}
-      </div>
-
-      {showFindings && canExpandAuth && (
-        <div className="mb-2 flex flex-col gap-2 rounded border border-zinc-200 bg-zinc-50 p-2 text-xs dark:border-zinc-800 dark:bg-zinc-900/40">
-          {findings.map((f, i) => (
-            <div key={i} className="flex flex-col gap-0.5">
-              <div className="flex items-start gap-1.5">
-                <span
-                  className={`shrink-0 rounded px-1 py-0.5 font-medium ${
-                    f.verdict === "contradicted"
-                      ? "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-400"
-                      : f.verdict === "supported"
-                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400"
-                        : "bg-zinc-200 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
-                  }`}
-                >
-                  {VERDICT_LABEL[f.verdict]}
-                </span>
-                <span className="text-zinc-700 dark:text-zinc-200">{f.claim}</span>
-              </div>
-              {f.quote && (
-                <p className="border-l-2 border-zinc-300 pl-2 text-zinc-500 dark:border-zinc-700">
-                  “{f.quote}”
-                </p>
-              )}
-              {f.url && (
-                <a
-                  href={f.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-fit text-zinc-500 underline underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"
-                >
-                  출처 원문 →
-                </a>
-              )}
-            </div>
-          ))}
-          <p className="text-zinc-400">
-            진실성 판정은 참고용 플래그입니다. 필요하면 평가 반영 해제·다른 학생으로 이동·점수
-            보정으로 교사가 조치하세요(자동 조치 없음).
-          </p>
-        </div>
-      )}
-
-      {editing ? (
-        <textarea
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={5}
-          className={`${inputClass} w-full resize-y`}
-        />
-      ) : (
-        <p className={`text-sm text-zinc-600 dark:text-zinc-300 ${expanded ? "" : "line-clamp-2"}`}>
-          {row.content_text || "(빈 내용)"}
+      {error && (
+        <p className="text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/20 p-2.5 rounded-md border border-red-200 dark:border-red-900">
+          {error}
         </p>
       )}
 
-      <div className="mt-2 flex flex-wrap items-center gap-3 text-xs">
-        <label className="flex items-center gap-1 text-zinc-500">
-          <input
-            type="checkbox"
-            checked={evalOn}
-            onChange={(e) => {
-              setEvalOn(e.target.checked);
-              act(() => toggleInclude(projectId, row.id, "eval", e.target.checked), false);
-            }}
-          />
-          평가 반영
-        </label>
-        <label className="flex items-center gap-1 text-zinc-500">
-          <input
-            type="checkbox"
-            checked={recordOn}
-            onChange={(e) => {
-              setRecordOn(e.target.checked);
-              act(() => toggleInclude(projectId, row.id, "record", e.target.checked), false);
-            }}
-          />
-          생기부 반영
-        </label>
+      {/* 표 컨테이너 (작업결과표 스타일 적용) */}
+      <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 shadow-sm">
+        <table className="w-full border-collapse text-sm min-w-[700px]">
+          <thead>
+            <tr className="bg-zinc-50 dark:bg-zinc-900 text-left border-b border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 font-medium">
+              <th className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-center w-[100px] font-semibold">
+                학번
+              </th>
+              <th className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-center w-[120px] font-semibold">
+                이름
+              </th>
+              {fileColumns.map((file) => (
+                <th
+                  key={file}
+                  className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 min-w-[280px] font-medium"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate max-w-[220px]" title={file}>
+                      {file}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={pending}
+                      onClick={() => handleDeleteColumn(file)}
+                      className="px-1.5 py-0.5 border border-red-200 dark:border-red-900 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded text-[10px] transition font-normal"
+                    >
+                      열 삭제
+                    </button>
+                  </div>
+                </th>
+              ))}
+              {fileColumns.length === 0 && (
+                <th className="px-3 py-2.5 text-zinc-400 font-normal">
+                  수합된 파일이 없습니다.
+                </th>
+              )}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
+            {students.map((student) => {
+              const studentFiles = subMap.get(student.id);
+              return (
+                <tr
+                  key={student.id}
+                  className="hover:bg-zinc-50/50 dark:hover:bg-zinc-900/40 transition-colors"
+                >
+                  {/* 학번 셀 */}
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 text-center font-mono text-zinc-500 dark:text-zinc-400">
+                    {student.student_number || "-"}
+                  </td>
 
-        {!editing && (
-          <button type="button" onClick={() => setExpanded((v) => !v)} className={ghostBtn}>
-            {expanded ? "접기" : "전체"}
-          </button>
-        )}
-        {editing ? (
-          <>
+                  {/* 이름 셀 + 수동추가 트리거 */}
+                  <td className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2.5 sticky left-0 bg-white dark:bg-zinc-950 z-10">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                        {student.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManualText("");
+                          setManualAddStudentId(
+                            manualAddStudentId === student.id ? null : student.id
+                          );
+                        }}
+                        className="text-[10px] text-zinc-500 hover:text-zinc-800 underline dark:hover:text-zinc-300 whitespace-nowrap"
+                      >
+                        +수동
+                      </button>
+                    </div>
+
+                    {/* 수동 추가 폼 */}
+                    {manualAddStudentId === student.id && (
+                      <div className="mt-2 border border-dashed border-zinc-300 dark:border-zinc-700 p-1.5 rounded bg-zinc-50 dark:bg-zinc-900/50 z-20">
+                        <textarea
+                          value={manualText}
+                          onChange={(e) => setManualText(e.target.value)}
+                          placeholder="제출물 내용 입력…"
+                          className="w-full text-xs p-1 border border-zinc-300 dark:border-zinc-700 rounded bg-white dark:bg-zinc-950 focus:outline-none"
+                          rows={3}
+                        />
+                        <div className="flex justify-end gap-1 mt-1">
+                          <button
+                            type="button"
+                            disabled={pending || !manualText.trim()}
+                            onClick={() => handleAddManual(student.id)}
+                            className="px-2 py-0.5 bg-zinc-800 text-white rounded text-[10px] hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900"
+                          >
+                            추가
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setManualAddStudentId(null)}
+                            className="px-2 py-0.5 border border-zinc-300 dark:border-zinc-700 rounded text-[10px] hover:bg-zinc-100"
+                          >
+                            취소
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </td>
+
+                  {/* 파일 컬럼별 셀 */}
+                  {fileColumns.map((file) => {
+                    const cellSubs = studentFiles?.get(file) ?? [];
+                    return (
+                      <td
+                        key={file}
+                        className="border-r border-zinc-200 dark:border-zinc-800 px-3 py-2"
+                      >
+                        {cellSubs.map((sub) => (
+                          <SubmissionCellBlock
+                            key={sub.id}
+                            projectId={projectId}
+                            sub={sub}
+                            students={students}
+                            onReassign={handleReassign}
+                            onDelete={handleDelete}
+                            onUpdateText={handleUpdateText}
+                            onToggleEval={(id, val) =>
+                              void toggleInclude(projectId, id, "eval", val)
+                            }
+                            onToggleRecord={(id, val) =>
+                              void toggleInclude(projectId, id, "record", val)
+                            }
+                          />
+                        ))}
+                      </td>
+                    );
+                  })}
+
+                  {fileColumns.length === 0 && (
+                    <td className="px-3 py-2 text-zinc-400 italic text-xs">
+                      오른쪽 "+수동"을 눌러 제출물을 추가할 수 있습니다.
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ── 개별 제출물 셀 블록 컴포넌트 ──────────────────────────────────────────
+
+function SubmissionCellBlock({
+  projectId,
+  sub,
+  students,
+  onReassign,
+  onDelete,
+  onUpdateText,
+  onToggleEval,
+  onToggleRecord,
+}: {
+  projectId: string;
+  sub: SubRow;
+  students: StudentOpt[];
+  onReassign: (subId: string, toStudentId: string) => void;
+  onDelete: (subId: string) => void;
+  onUpdateText: (subId: string, text: string) => Promise<void>;
+  onToggleEval: (subId: string, val: boolean) => void;
+  onToggleRecord: (subId: string, val: boolean) => void;
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [editText, setEditText] = useState(sub.content_text);
+  const [evalOn, setEvalOn] = useState(sub.include_in_eval);
+  const [recordOn, setRecordOn] = useState(sub.include_in_record);
+  const [pending, start] = useTransition();
+
+  useEffect(() => {
+    setEvalOn(sub.include_in_eval);
+  }, [sub.include_in_eval]);
+
+  useEffect(() => {
+    setRecordOn(sub.include_in_record);
+  }, [sub.include_in_record]);
+
+  const handleSave = () => {
+    start(async () => {
+      await onUpdateText(sub.id, editText);
+      setEditing(false);
+      router.refresh();
+    });
+  };
+
+  const handleApprove = () => {
+    start(async () => {
+      try {
+        await approveExtraction(projectId, sub.id);
+        router.refresh();
+      } catch (e) {
+        alert(e instanceof Error ? e.message : "승인 오류");
+      }
+    });
+  };
+
+  const handleDeleteOrig = () => {
+    if (confirm("원본 파일을 영구 삭제하시겠습니까?")) {
+      start(async () => {
+        try {
+          await deleteOriginal(projectId, sub.id);
+          router.refresh();
+        } catch (e) {
+          alert(e instanceof Error ? e.message : "삭제 오류");
+        }
+      });
+    }
+  };
+
+  const approved = !!sub.extraction_approved_at;
+
+  return (
+    <div className="border border-zinc-200 dark:border-zinc-800 rounded p-2 mb-1.5 bg-zinc-50/50 dark:bg-zinc-900/50 last:mb-0 shadow-sm text-xs font-normal">
+      {editing ? (
+        <div className="flex flex-col gap-1.5">
+          <textarea
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            className="w-full text-xs p-1 border border-zinc-300 dark:border-zinc-700 rounded bg-white dark:bg-zinc-950 focus:outline-none"
+            rows={4}
+          />
+          <div className="flex gap-1 justify-end">
             <button
               type="button"
+              onClick={handleSave}
               disabled={pending}
-              onClick={() => act(async () => { await updateSubmissionText(projectId, row.id, text); setEditing(false); })}
-              className={ghostBtn}
+              className="px-2 py-0.5 bg-zinc-800 text-white rounded text-[10px] hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900"
             >
               저장
             </button>
-            <button type="button" onClick={() => { setText(row.content_text); setEditing(false); }} className={ghostBtn}>
+            <button
+              type="button"
+              onClick={() => {
+                setEditText(sub.content_text);
+                setEditing(false);
+              }}
+              className="px-2 py-0.5 border border-zinc-300 dark:border-zinc-700 rounded text-[10px] hover:bg-zinc-100"
+            >
               취소
             </button>
-          </>
-        ) : (
-          <button type="button" onClick={() => setEditing(true)} className={ghostBtn}>
-            수정
-          </button>
-        )}
-        {!editing && !moving && (
-          <button
-            type="button"
-            onClick={() => {
-              setMoveTo("");
-              setMoving(true);
-            }}
-            className={ghostBtn}
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1">
+          {/* 제출물 내용 */}
+          <div
+            className="whitespace-pre-wrap max-h-28 overflow-y-auto text-zinc-700 dark:text-zinc-300 leading-normal"
+            title={sub.content_text}
           >
-            다른 학생으로 이동
-          </button>
-        )}
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => {
-            if (confirm("이 제출물을 삭제할까요?")) act(() => deleteSubmission(projectId, row.id));
-          }}
-          className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
-        >
-          삭제
-        </button>
+            {sub.content_text || <span className="text-zinc-400 italic">(내용 없음)</span>}
+          </div>
 
-        {/* 원본 파일: 추출 확인 후에만 삭제 가능 (INV-5) */}
-        {row.storage_path ? (
-          approved ? (
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => {
-                if (confirm("원본 파일을 삭제할까요? 되돌릴 수 없습니다.")) act(() => deleteOriginal(projectId, row.id));
+          {/* 메타데이터 및 토글 영역 */}
+          <div className="flex flex-wrap items-center justify-between gap-1 pt-1 mt-1 border-t border-zinc-150 dark:border-zinc-800 text-[10px] text-zinc-500">
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-0.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={evalOn}
+                  onChange={(e) => {
+                    setEvalOn(e.target.checked);
+                    onToggleEval(sub.id, e.target.checked);
+                  }}
+                  className="h-3 w-3"
+                />
+                평가
+              </label>
+              <label className="flex items-center gap-0.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={recordOn}
+                  onChange={(e) => {
+                    setRecordOn(e.target.checked);
+                    onToggleRecord(sub.id, e.target.checked);
+                  }}
+                  className="h-3 w-3"
+                />
+                생기부
+              </label>
+            </div>
+            <AuthenticityBadge status={sub.authenticity_status} />
+          </div>
+
+          {/* 액션 컨트롤 영역 */}
+          <div className="flex flex-wrap items-center justify-between gap-2 mt-1.5 pt-1.5 border-t border-dashed border-zinc-200 dark:border-zinc-800">
+            {/* 귀속 이동 */}
+            <select
+              value=""
+              onChange={(e) => {
+                if (e.target.value) {
+                  onReassign(sub.id, e.target.value);
+                }
               }}
-              className={ghostBtn}
+              className="text-[10px] px-1 py-0.5 border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-950 rounded max-w-[90px] truncate"
             >
-              원본 삭제
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => act(() => approveExtraction(projectId, row.id))}
-              className={ghostBtn}
-            >
-              추출 확인(승인)
-            </button>
-          )
-        ) : (
-          <span className="text-zinc-300 dark:text-zinc-600">원본 없음</span>
-        )}
-        {approved && row.storage_path && <span className="text-emerald-600 dark:text-emerald-500">승인됨</span>}
-      </div>
+              <option value="">이동…</option>
+              {students
+                .filter((s) => s.id !== sub.student_id)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+            </select>
 
-      {/* 재귀속 (SPEC 5.4) — 자동 귀속이 틀렸을 때 교사가 바로잡는 경로. 채점·생기부는 재계산이 필요해진다. */}
-      {moving && (
-        <div className="mt-2 flex flex-wrap items-center gap-2 rounded border border-amber-300 bg-amber-50 p-2 text-xs dark:border-amber-800 dark:bg-amber-950">
-          <span className="text-amber-800 dark:text-amber-300">옮길 학생</span>
-          <select
-            value={moveTo}
-            onChange={(e) => setMoveTo(e.target.value)}
-            className={inputClass}
-          >
-            <option value="">— 선택 —</option>
-            {students
-              .filter((s) => s.id !== row.student_id)
-              .map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.student_number ? `${s.student_number} ` : ""}
-                  {s.name}
-                </option>
-              ))}
-          </select>
-          <button
-            type="button"
-            disabled={pending || !moveTo}
-            onClick={() =>
-              act(async () => {
-                await reassignSubmission(projectId, row.id, moveTo);
-                setMoving(false);
-              })
-            }
-            className={ghostBtn}
-          >
-            {pending ? "이동 중…" : "이동"}
-          </button>
-          <button type="button" onClick={() => setMoving(false)} className={ghostBtn}>
-            취소
-          </button>
-          <span className="text-amber-700 dark:text-amber-400">
-            이동하면 채점·생기부를 다시 계산해야 합니다.
-          </span>
+            {/* 원본 제어 */}
+            <div className="flex items-center gap-1.5 text-[10px]">
+              {sub.storage_path ? (
+                approved ? (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={handleDeleteOrig}
+                    className="text-amber-600 hover:text-amber-800 dark:hover:text-amber-400 underline"
+                  >
+                    원본삭제
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={pending}
+                    onClick={handleApprove}
+                    className="text-zinc-500 hover:text-zinc-700 underline"
+                  >
+                    추출승인
+                  </button>
+                )
+              ) : (
+                <span className="text-zinc-400">원본없음</span>
+              )}
+
+              {/* 기본 편집/삭제 */}
+              <button
+                type="button"
+                onClick={() => setEditing(true)}
+                className="text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-300 underline"
+              >
+                수정
+              </button>
+              <button
+                type="button"
+                disabled={pending}
+                onClick={() => onDelete(sub.id)}
+                className="text-red-500 hover:text-red-700 underline"
+              >
+                삭제
+              </button>
+            </div>
+          </div>
         </div>
       )}
-
-      {error && <p className="mt-1 text-xs text-red-600 dark:text-red-400">{error}</p>}
-    </li>
+    </div>
   );
 }

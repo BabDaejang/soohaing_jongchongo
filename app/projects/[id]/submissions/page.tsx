@@ -52,6 +52,7 @@ export default async function SubmissionsPage({
       pending_content: s.pending_content,
       raw_student_no: s.raw_student_no,
       raw_student_name: s.raw_student_name,
+      storage_path: s.storage_path,
     }));
 
   const matched: SubRow[] = submissions

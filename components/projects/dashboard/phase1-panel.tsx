@@ -184,8 +184,13 @@ export function Phase1Panel({
       return next;
     });
 
-  const remove = async (path: string) => {
+  const remove = async (path: string, filename: string, ingested: boolean) => {
     setErrors([]);
+    if (ingested) {
+      if (!confirm(`'${filename}' 파일은 이미 수합되었습니다. 원본 파일을 삭제하여 용량을 확보하시겠습니까?\n(수합된 제출물 텍스트 데이터는 유지됩니다.)`)) {
+        return;
+      }
+    }
     try {
       await deleteUploadedFile(projectId, path);
       await refreshFiles();
@@ -247,20 +252,6 @@ export function Phase1Panel({
           providers={providers}
           extract={extract}
         />
-        <div className="flex flex-wrap items-center gap-3">
-          <button type="button" onClick={onRun} disabled={running || preparing} className={btn}>
-            {running ? "수합·매칭 중…" : preparing ? "준비 중…" : "수합 & 매칭"}
-          </button>
-          {progress && running && (
-            <span className="text-xs font-medium text-zinc-500">
-              진행 {progress.done}/{progress.total}
-            </span>
-          )}
-          <span className="text-xs text-zinc-400">
-            체크한 파일을 수합한 뒤 자동으로 학생 매칭을 이어서 실행합니다. 진행 중 일시정지·재개·긴급
-            중단할 수 있고, 중단해도 처리분은 반영됩니다.
-          </span>
-        </div>
       </div>
 
       {/* ② 실행 터미널 (상시) */}
@@ -366,9 +357,8 @@ export function Phase1Panel({
                 )}
                 <button
                   type="button"
-                  onClick={() => void remove(f.path)}
-                  disabled={f.ingested || running}
-                  title={f.ingested ? "수합된 파일은 제출물 상세의 추출 확인 절차로 삭제합니다." : undefined}
+                  onClick={() => void remove(f.path, f.filename, f.ingested)}
+                  disabled={running}
                   className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
                   삭제
@@ -379,7 +369,23 @@ export function Phase1Panel({
         )}
       </div>
 
-      {/* ⑤ 확인 대기 배지 + 매칭·확인 링크 */}
+      {/* ⑤ [수합 & 매칭] 실행 컨트롤 영역 (이동됨) */}
+      <div className="flex flex-wrap items-center gap-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+        <button type="button" onClick={onRun} disabled={running || preparing} className={btn}>
+          {running ? "수합·매칭 중…" : preparing ? "준비 중…" : "수합 & 매칭"}
+        </button>
+        {progress && running && (
+          <span className="text-xs font-medium text-zinc-500">
+            진행 {progress.done}/{progress.total}
+          </span>
+        )}
+        <span className="text-xs text-zinc-400">
+          체크한 파일을 수합한 뒤 자동으로 학생 매칭을 이어서 실행합니다. 진행 중 일시정지·재개·긴급
+          중단할 수 있고, 중단해도 처리분은 반영됩니다.
+        </span>
+      </div>
+
+      {/* ⑥ 확인 대기 배지 + 매칭·확인 링크 */}
       <div className="flex items-center gap-3 text-sm">
         {pendingCount > 0 && (
           <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">

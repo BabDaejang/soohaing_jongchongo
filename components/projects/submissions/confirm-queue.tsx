@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   acceptPendingContent,
@@ -8,6 +8,7 @@ import {
   attributeNew,
   rejectPendingContent,
   suggestMatchCandidates,
+  getSignedFileUrl,
   type LlmCandidate,
 } from "@/app/projects/[id]/submissions/actions";
 
@@ -23,6 +24,7 @@ export type QueueItem = {
   pending_content: unknown;
   raw_student_no: string | null;
   raw_student_name: string | null;
+  storage_path?: string | null;
 };
 
 // 큐에 남는 건 애매한 것뿐이다 (SPEC 5.2). 왜 자동 처리되지 않았는지 알려줘야 교사가 판단할 수 있다.
@@ -91,6 +93,15 @@ function QueueRow({
   const [newName, setNewName] = useState(item.raw_student_name ?? "");
   const [newNo, setNewNo] = useState(item.raw_student_no ?? "");
   const [hidden, setHidden] = useState(false);
+  const [signedUrl, setSignedUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (item.storage_path && item.storage_path.includes("/temp_")) {
+      getSignedFileUrl(projectId, item.storage_path)
+        .then(setSignedUrl)
+        .catch(console.error);
+    }
+  }, [projectId, item.storage_path]);
 
   if (hidden) return null;
 
@@ -169,6 +180,15 @@ function QueueRow({
         </>
       ) : (
         <>
+          {signedUrl && (
+            <div className="mb-3 border border-zinc-200 rounded-md overflow-hidden bg-zinc-100 dark:border-zinc-800 dark:bg-zinc-950">
+              <iframe
+                src={signedUrl}
+                className="w-full h-[400px]"
+                title="임시 페이지 뷰어"
+              />
+            </div>
+          )}
           <p className="mb-3 line-clamp-3 rounded bg-zinc-50 p-2 text-sm text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300">
             {item.content_text.slice(0, 300) || "(빈 내용)"}
           </p>

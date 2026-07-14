@@ -557,6 +557,10 @@ export async function attributeExisting(
     .eq("id", submissionId)
     .eq("project_id", projectId);
   if (error) throw new Error(error.message);
+
+  // 임시 분할 페이지 파일 정리
+  await cleanupTemporaryPage(supabase, projectId, submissionId);
+
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -606,6 +610,10 @@ export async function attributeNew(
     .eq("id", submissionId)
     .eq("project_id", projectId);
   if (error) throw new Error(error.message);
+
+  // 임시 분할 페이지 파일 정리
+  await cleanupTemporaryPage(supabase, projectId, submissionId);
+
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -695,6 +703,18 @@ export async function updateSubmissionText(
 
 export async function deleteSubmission(projectId: string, submissionId: string) {
   const { supabase } = await requireProjectOwner(projectId);
+
+  // 임시 분할 페이지 파일 정리
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select("storage_path")
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (sub?.storage_path && sub.storage_path.includes("/temp_")) {
+    await supabase.storage.from("originals").remove([sub.storage_path]);
+  }
+
   const { error } = await supabase
     .from("submissions")
     .delete()
@@ -776,5 +796,69 @@ export async function deleteOriginal(projectId: string, submissionId: string) {
     entityId: submissionId,
     detail: { reason: "manual" },
   });
+  revalidatePath(`/projects/${projectId}/submissions`);
+}
+
+// ── 임시 분할 페이지 파일 정리 및 signed URL 생성 ───────────────────────
+
+async function cleanupTemporaryPage(
+  supabase: Client,
+  projectId: string,
+  submissionId: string,
+) {
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select("storage_path")
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (sub?.storage_path && sub.storage_path.includes("/temp_")) {
+    await supabase.storage.from("originals").remove([sub.storage_path]);
+    await supabase
+      .from("submissions")
+      .update({ storage_path: null })
+      .eq("id", submissionId)
+      .eq("project_id", projectId);
+  }
+}
+
+export async function getSignedFileUrl(projectId: string, path: string): Promise<string> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  if (!path.startsWith(`${userId}/${projectId}/`)) {
+    throw new Error("접근할 수 없는 파일 경로입니다.");
+  }
+  const { data, error } = await supabase.storage.from("originals").createSignedUrl(path, 60 * 15);
+  if (error || !data?.signedUrl) {
+    throw new Error(`임시 링크 생성 실패: ${error?.message}`);
+  }
+  return data.signedUrl;
+}
+
+export async function deleteSubmissionsByFile(projectId: string, filename: string) {
+  const { supabase } = await requireProjectOwner(projectId);
+  
+  // 임시 분할 파일들이 스토리지에 있으면 일괄 제거
+  const { data: subs } = await supabase
+    .from("submissions")
+    .select("storage_path")
+    .eq("project_id", projectId)
+    .eq("source_filename", filename);
+    
+  const pathsToDelete = (subs ?? [])
+    .map((s) => s.storage_path)
+    .filter((p): p is string => !!p && p.includes("/temp_"));
+    
+  if (pathsToDelete.length > 0) {
+    await supabase.storage.from("originals").remove(pathsToDelete);
+  }
+
+  // 데이터베이스에서 해당 파일명을 소스로 가지는 제출물 일괄 삭제
+  const { error } = await supabase
+    .from("submissions")
+    .delete()
+    .eq("project_id", projectId)
+    .eq("source_filename", filename);
+    
+  if (error) throw new Error(error.message);
   revalidatePath(`/projects/${projectId}/submissions`);
 }

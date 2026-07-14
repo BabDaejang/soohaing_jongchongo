@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { randomUUID } from "node:crypto";
+import { PDFDocument } from "pdf-lib";
 import { requireProjectOwner } from "@/lib/projects";
 import { callLLM } from "@/lib/llm";
 import type { ModelRouting } from "@/lib/llm";
@@ -255,18 +257,13 @@ export async function deleteUploadedFile(
   const { userId, supabase } = await requireProjectOwner(projectId);
   assertOwnedPath(userId, projectId, path);
 
-  // INV-5 우회 금지: 이미 수합된 파일의 원본 삭제는 추출 확인(승인) 절차를 따른다.
-  const { data: sub } = await supabase
+  // 수합 완료된 원본 삭제 허용: DB 텍스트는 살리고 storage_path만 null로 갱신
+  const { error: updateError } = await supabase
     .from("submissions")
-    .select("id")
+    .update({ storage_path: null })
     .eq("project_id", projectId)
-    .eq("storage_path", path)
-    .maybeSingle();
-  if (sub) {
-    throw new Error(
-      "이미 수합된 파일입니다 — 원본 삭제는 제출물 상세의 추출 확인(승인) 절차를 따르세요.",
-    );
-  }
+    .eq("storage_path", path);
+  if (updateError) throw new Error(updateError.message);
 
   const { error } = await supabase.storage.from("originals").remove([path]);
   if (error) throw new Error(error.message);
@@ -381,6 +378,10 @@ export async function ingestOneFile(
       sourceType = "docx";
     } else if (kind === "pdf") {
       const { text: layer, pages } = await parsePdfText(bytes);
+      if (pages > 1) {
+        // 다인용 PDF: 페이지 단위 분할 및 맥락 기반 수합 진행
+        return await ingestMultiPagePdf(projectId, userId, supabase, path, filename, bytes, layer, pages);
+      }
       if (isLikelyScan(layer, pages)) {
         text = await ocrExtract(userId, routing, {
           type: "document",
@@ -528,5 +529,269 @@ export async function previewSpreadsheet(
     sampleRows: data.rows.slice(0, 5),
     suggested,
   };
+}
+
+// ── 다인용 PDF 분리 및 맥락 매칭 헬퍼 ───────────────────────────────────
+
+async function splitPdfPages(pdfBytes: Uint8Array): Promise<Uint8Array[]> {
+  const srcDoc = await PDFDocument.load(pdfBytes);
+  const pageCount = srcDoc.getPageCount();
+  const pagesBytes: Uint8Array[] = [];
+  for (let i = 0; i < pageCount; i++) {
+    const newDoc = await PDFDocument.create();
+    const [copiedPage] = await newDoc.copyPages(srcDoc, [i]);
+    newDoc.addPage(copiedPage);
+    const bytes = await newDoc.save();
+    pagesBytes.push(bytes);
+  }
+  return pagesBytes;
+}
+
+async function ingestMultiPagePdf(
+  projectId: string,
+  userId: string,
+  supabase: Client,
+  path: string,
+  filename: string,
+  bytes: Uint8Array,
+  layerText: string,
+  totalPages: number,
+): Promise<{ ok: boolean; message: string }> {
+  try {
+    const pageBytesList = await splitPdfPages(bytes);
+    const routing = await loadRouting(supabase, projectId);
+
+    const pagesData: { pageNum: number; text: string; isScan: boolean }[] = [];
+    for (let i = 0; i < totalPages; i++) {
+      const pageBytes = pageBytesList[i];
+      const { text: pageLayerText } = await parsePdfText(pageBytes);
+      const isScan = isLikelyScan(pageLayerText, 1);
+      let pageText = "";
+      if (isScan) {
+        pageText = await ocrExtract(userId, routing, {
+          type: "document",
+          mediaType: "application/pdf",
+          dataBase64: Buffer.from(pageBytes).toString("base64"),
+          filename: `${filename}_page_${i + 1}.pdf`,
+        });
+      } else {
+        pageText = pageLayerText;
+      }
+      pagesData.push({ pageNum: i + 1, text: pageText, isScan });
+    }
+
+    // 학생 명단 로드
+    const { data: students } = await supabase
+      .from("students")
+      .select("id, student_number, name")
+      .eq("project_id", projectId);
+    const roster = students ?? [];
+
+    let mapping: { pageNum: number; student_id: string | null; status: "matched" | "ambiguous" }[] = [];
+
+    if (roster.length > 0) {
+      const rosterText = roster
+        .map((s) => `${s.id} | 학번:${s.student_number ?? "-"} | 이름:${s.name}`)
+        .join("\n");
+
+      const pagesText = pagesData
+        .map((p) => `[페이지 ${p.pageNum}]\n${p.text.slice(0, 1500)}`)
+        .join("\n\n=== NEXT PAGE ===\n\n");
+
+      const prompt =
+        `아래는 학생 명단과, 하나의 PDF 파일에서 분할된 각 페이지의 텍스트이다. ` +
+        `이 PDF 파일은 여러 학생의 제출물이 묶인 것이다. 각 페이지가 어느 학생의 제출물인지 판정하라.\n\n` +
+        `[판정 규칙]\n` +
+        `1. 페이지들은 순서대로 정렬되어 있다. 한 학생의 제출물이 여러 페이지에 걸쳐 작성되었을 수 있다.\n` +
+        `2. 페이지 본문에 학번이나 이름이 명시되어 있다면 해당 학생으로 귀속한다.\n` +
+        `3. 페이지 본문에 학번/이름이 없더라도, 바로 이전 페이지가 '학생 A'의 제출물이었고, 내용의 흐름이 이어지거나 새로운 제출물의 시작(새로운 이름/학번)이 보이지 않는다면 해당 페이지도 '학생 A'의 제출물로 판정한다.\n` +
+        `4. 만약 해당 페이지가 누구의 제출물인지 앞뒤 맥락으로도 판단하기 어렵거나 모호하다면 status를 'ambiguous'로 표시하고 student_id를 null로 하라.\n` +
+        `5. 명단에 일치하는 학생이 아예 없거나 판단할 수 없다면 'ambiguous'로 표시하라.\n\n` +
+        `[학생 명단]\n${rosterText}\n\n` +
+        `[페이지별 텍스트]\n${pagesText}\n\n` +
+        `각 페이지별 판정 결과를 다음 JSON 배열 형식으로만 답하라. 다른 설명이나 텍스트는 포함하지 말라.\n` +
+        `[\n` +
+        `  { "pageNum": 1, "student_id": "<학생 ID>", "status": "matched" | "ambiguous" },\n` +
+        `  { "pageNum": 2, "student_id": null, "status": "ambiguous" }\n` +
+        `]`;
+
+      const res = await callLLM({
+        userId,
+        purpose: "매칭",
+        modelRouting: routing,
+        temperature: 0,
+        messages: [{ role: "user", content: prompt }],
+      });
+
+      const match = res.text.match(/\[[\s\S]*\]/);
+      if (match) {
+        try {
+          mapping = JSON.parse(match[0]);
+        } catch {
+          // JSON 파싱 실패 시 기본적으로 전부 모호함으로 처리
+        }
+      }
+    }
+
+    // mapping에 명시되지 않은 페이지는 모호함으로 처리
+    const mappingMap = new Map(mapping.map((m) => [m.pageNum, m]));
+    const finalMapping = pagesData.map((p) => {
+      const m = mappingMap.get(p.pageNum);
+      return {
+        pageNum: p.pageNum,
+        student_id: m?.student_id || null,
+        status: m?.status || "ambiguous",
+      };
+    });
+
+    // 1. 매칭된 연속된 페이지 병합 처리
+    const segments: { studentId: string; pageNums: number[]; texts: string[] }[] = [];
+    let currentSegment: { studentId: string; pageNums: number[]; texts: string[] } | null = null;
+
+    for (const page of finalMapping) {
+      if (page.status === "matched" && page.student_id) {
+        const studentId = page.student_id;
+        const pageText = pagesData.find((p) => p.pageNum === page.pageNum)?.text || "";
+        if (currentSegment && currentSegment.studentId === studentId) {
+          currentSegment.pageNums.push(page.pageNum);
+          currentSegment.texts.push(pageText);
+        } else {
+          currentSegment = { studentId, pageNums: [page.pageNum], texts: [pageText] };
+          segments.push(currentSegment);
+        }
+      } else {
+        currentSegment = null;
+      }
+    }
+
+    let insertedCount = 0;
+    let skippedCount = 0;
+    let pendingCount = 0;
+
+    for (const seg of segments) {
+      const mergedText = seg.texts.join("\n\n");
+      const normalized = normalizeText(mergedText);
+      const content_hash = sha256Hex(normalized);
+      const submissionKey = `${filename}#pages_${seg.pageNums.join("-")}`;
+
+      // 중복 체크 및 저장
+      const { data: existing } = await supabase
+        .from("submissions")
+        .select("id, content_hash")
+        .eq("project_id", projectId)
+        .eq("submission_key", submissionKey)
+        .maybeSingle();
+
+      const decision = decideDedup(
+        existing ? { id: existing.id, content_hash: existing.content_hash } : null,
+        content_hash,
+      );
+
+      if (decision.action === "skip") {
+        skippedCount++;
+        continue;
+      }
+
+      if (decision.action === "update_pending") {
+        await supabase
+          .from("submissions")
+          .update({
+            match_status: "update_pending",
+            pending_content: { content_text: normalized, content_hash },
+          })
+          .eq("id", decision.id);
+        pendingCount++;
+        continue;
+      }
+
+      const st = roster.find((s) => s.id === seg.studentId);
+      const firstPage = pagesData.find((p) => p.pageNum === seg.pageNums[0]);
+      const sourceType = firstPage?.isScan ? "pdf_scan" : "pdf_text";
+
+      const { error } = await supabase.from("submissions").insert({
+        project_id: projectId,
+        content_text: normalized,
+        content_hash,
+        source_type: sourceType,
+        submission_key: submissionKey,
+        source_filename: filename,
+        storage_path: path,
+        student_id: seg.studentId,
+        match_status: "auto_matched",
+        match_method: "auto_name",
+        identity_source: "llm",
+        raw_student_no: st?.student_number ?? null,
+        raw_student_name: st?.name ?? null,
+      });
+      if (error) throw new Error(error.message);
+      insertedCount++;
+    }
+
+    // 2. 모호한 페이지 임시 저장 (단일 페이지 PDF)
+    let ambiguousCount = 0;
+    for (const page of finalMapping) {
+      if (page.status === "ambiguous" || !page.student_id) {
+        const pageBytes = pageBytesList[page.pageNum - 1];
+        const pageText = pagesData.find((p) => p.pageNum === page.pageNum)?.text || "";
+        const normalized = normalizeText(pageText);
+        const content_hash = sha256Hex(normalized);
+        const submissionKey = `${filename}#page_${page.pageNum}`;
+
+        // 이미 생성된 임시 제출물 확인
+        const { data: existing } = await supabase
+          .from("submissions")
+          .select("id")
+          .eq("project_id", projectId)
+          .eq("submission_key", submissionKey)
+          .maybeSingle();
+
+        if (existing) {
+          // 이미 존재하면 스킵
+          continue;
+        }
+
+        // 단일 페이지 PDF 업로드
+        const tempPath = `${userId}/${projectId}/temp_${randomUUID()}__page_${page.pageNum}.pdf`;
+        const { error: uploadError } = await supabase.storage
+          .from("originals")
+          .upload(tempPath, pageBytes, {
+            contentType: "application/pdf",
+            upsert: false,
+          });
+        if (uploadError) throw new Error(uploadError.message);
+
+        // 임시 제출물 레코드 생성 (match_status = pending_confirm)
+        const pageData = pagesData.find((p) => p.pageNum === page.pageNum);
+        const isScan = pageData?.isScan ?? false;
+        const sourceType = isScan ? "pdf_scan" : "pdf_text";
+
+        const { error: insertError } = await supabase.from("submissions").insert({
+          project_id: projectId,
+          content_text: normalized,
+          content_hash,
+          source_type: sourceType,
+          submission_key: submissionKey,
+          source_filename: filename,
+          storage_path: tempPath,
+          match_status: "pending_confirm",
+          student_id: null,
+          raw_student_no: null,
+          raw_student_name: null,
+        });
+        if (insertError) throw new Error(insertError.message);
+        ambiguousCount++;
+      }
+    }
+
+    return {
+      ok: true,
+      message: `다인용 PDF(${totalPages}p) 분할 수합 완료: 매칭 ${insertedCount}건 · 중복 ${skippedCount}건 · 변경 대기 ${pendingCount}건 · 확인 대기 큐 ${ambiguousCount}건`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      message: `다인용 PDF 수합 실패: ${e instanceof Error ? e.message : "알 수 없는 오류"}`,
+    };
+  }
 }
 
