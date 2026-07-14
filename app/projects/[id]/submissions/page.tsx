@@ -74,36 +74,46 @@ export default async function SubmissionsPage({
     }));
 
   return (
-    <main className="mx-auto w-full max-w-3xl flex-1 px-4 py-10">
-      <header className="mb-8">
-        <Link
-          href={`/projects/${project.id}`}
-          className="text-sm text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
-        >
-          ← {project.name}
-        </Link>
-        <h1 className="mt-3 text-2xl font-bold">매칭 · 확인</h1>
-        <p className="mt-1 text-sm text-zinc-500">
-          매칭 실행은 대시보드 페이즈 1의 [수합 & 매칭]에서 합니다. 여기서는 동명이인·식별
-          불가로 확인이 필요한 제출물을 학생에게 지정하고, 자동 귀속이 틀렸다면 학생별
-          제출물에서 다른 학생으로 옮깁니다.
+    <main className="w-full flex-1 px-6 py-10 bg-grid-pattern">
+      <div className="mx-auto w-full max-w-4xl">
+        <header className="mb-8 border-4 border-black bg-neo-secondary p-6 shadow-neo-md rotate-[-0.5deg]">
           <Link
-            href={`/projects/${project.id}#phase-1`}
-            className="ml-1 underline underline-offset-2 hover:text-zinc-800 dark:hover:text-zinc-200"
+            href={`/projects/${project.id}`}
+            className="inline-flex items-center gap-1 text-xs font-bold border-2 border-black bg-white px-2.5 py-1 text-black shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer"
           >
-            ← 수합으로
+            ← {project.name}
           </Link>
-        </p>
-      </header>
+          <h1 className="mt-4 text-3xl font-black tracking-tight uppercase text-black">매칭 · 확인</h1>
+          <p className="mt-2 text-sm font-bold text-black/85">
+            매칭 실행은 대시보드 페이즈 1의 [수합 & 매칭]에서 합니다. 여기서는 동명이인·식별
+            불가로 확인이 필요한 제출물을 학생에게 지정하고, 자동 귀속이 틀렸다면 학생별
+            제출물에서 다른 학생으로 옮깁니다.
+            <Link
+              href={`/projects/${project.id}#phase-1`}
+              className="ml-2 font-black text-black underline underline-offset-4 hover:text-neo-accent"
+            >
+              ← 수합으로
+            </Link>
+          </p>
+        </header>
 
-      <section className="mb-10">
-        <h2 className="mb-3 text-sm font-semibold">확인 대기 큐 ({queue.length})</h2>
-        <ConfirmQueue projectId={project.id} students={students} items={queue} />
-      </section>
+        <section className="mb-10">
+          <h2 className="mb-4 text-xl font-black uppercase tracking-tight text-black border-b-4 border-black pb-2">
+            확인 대기 큐 ({queue.length})
+          </h2>
+          <ConfirmQueue projectId={project.id} students={students} items={queue} />
+        </section>
+      </div>
 
-      <section>
-        <h2 className="mb-3 text-sm font-semibold">학생별 제출물</h2>
-        <StudentSubmissions projectId={project.id} students={students} submissions={matched} />
+      <section className="w-full mt-12">
+        <div className="mx-auto w-full max-w-[98vw]">
+          <h2 className="mb-4 text-2xl font-black uppercase tracking-tight text-black border-b-4 border-black pb-2 px-4">
+            학생별 제출물
+          </h2>
+          <div className="px-4">
+            <StudentSubmissions projectId={project.id} students={students} submissions={matched} />
+          </div>
+        </div>
       </section>
     </main>
   );
