@@ -152,7 +152,7 @@ export function Phase3Panel({
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
-            onClick={start}
+            onClick={() => start()}
             disabled={running}
             className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
           >

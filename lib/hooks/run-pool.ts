@@ -272,9 +272,10 @@ export async function runPlanChain(
     isStopped: () => boolean;
     onProgress: (done: number, total: number) => void;
     onLog: (level: TermLevel, text: string) => void;
+    onStageChange?: (current: RunPlan, next: RunPlan | null) => void;
   },
   maxStages: number = 5,
-): Promise<{ aborted: boolean }> {
+): Promise<{ aborted: boolean; lastPlan?: RunPlan; nextPlan?: RunPlan }> {
   let stageCount = 0;
 
   for (let planIdx = 0; planIdx < plans.length; planIdx++) {
@@ -284,7 +285,7 @@ export async function runPlanChain(
       stageCount += 1;
       if (stageCount > maxStages) {
         callbacks.onLog("system", `연쇄 상한 ${maxStages}스테이지 초과 — 중단`);
-        return { aborted: true };
+        return { aborted: true, lastPlan: currentPlan };
       }
 
       if (stageCount > 1) {
@@ -300,7 +301,9 @@ export async function runPlanChain(
           "error",
           e instanceof Error ? e.message : "준비 중 오류가 발생했습니다.",
         );
-        return { aborted: true };
+        const nextStageFn = currentPlan.nextStage;
+        const next = nextStageFn ? nextStageFn({ succeeded: 0, failed: 0, aborted: true }) : null;
+        return { aborted: true, lastPlan: currentPlan, nextPlan: next || undefined };
       }
 
       for (const p of prep.prelude ?? []) callbacks.onLog(p.level, p.text);
@@ -325,16 +328,24 @@ export async function runPlanChain(
           "error",
           e instanceof Error ? e.message : "마무리 중 오류가 발생했습니다.",
         );
-        return { aborted: true };
-      }
-
-      if (outcome.aborted) {
-        return { aborted: true };
+        const nextStageFn = currentPlan.nextStage;
+        const next = nextStageFn ? nextStageFn(outcome) : null;
+        return { aborted: true, lastPlan: currentPlan, nextPlan: next || undefined };
       }
 
       // 다음 스테이지 연쇄
       const nextStageFn: ((r: RunOutcome) => RunPlan | null) | undefined = currentPlan.nextStage;
-      currentPlan = nextStageFn ? nextStageFn(outcome) : null;
+      const nextPlan: RunPlan | null = nextStageFn ? nextStageFn(outcome) : null;
+
+      if (callbacks.onStageChange) {
+        callbacks.onStageChange(currentPlan, nextPlan);
+      }
+
+      if (outcome.aborted) {
+        return { aborted: true, lastPlan: currentPlan, nextPlan: nextPlan || undefined };
+      }
+
+      currentPlan = nextPlan;
     }
   }
 

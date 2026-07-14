@@ -20,6 +20,7 @@ import { createClient } from "@/lib/supabase/client";
 import {
   useSequentialRun,
   type SequentialTarget,
+  type RunPlan,
 } from "@/lib/hooks/use-sequential-run";
 import { RunTerminal } from "@/components/projects/run-terminal";
 import { emitWorksheetRefresh } from "@/lib/worksheet/refresh";
@@ -251,27 +252,27 @@ export function Phase2Panel({
   );
 
   // 스테이지 연쇄: S1 -> S2 -> S3 -> S4
-  const nextStage3To4 = useCallback(
+  const plan4 = useMemo<RunPlan>(
     () => ({ prepare: evalPrepare, stepOne: evalStepOne, finalize: evalFinalize }),
-    [evalPrepare, evalStepOne, evalFinalize],
+    [evalPrepare, evalStepOne, evalFinalize]
   );
 
-  const nextStage2To3 = useCallback(
-    () => ({ prepare: authPrepare, stepOne: authStepOne, finalize: authFinalize, nextStage: nextStage3To4 }),
-    [authPrepare, authStepOne, authFinalize, nextStage3To4],
+  const plan3 = useMemo<RunPlan>(
+    () => ({ prepare: authPrepare, stepOne: authStepOne, finalize: authFinalize, nextStage: () => plan4 }),
+    [authPrepare, authStepOne, authFinalize, plan4]
   );
 
-  const nextStage1To2 = useCallback(
-    () => ({ prepare: s2Prepare, stepOne: s2StepOne, finalize: s2Finalize, nextStage: nextStage2To3 }),
-    [s2Prepare, s2StepOne, s2Finalize, nextStage2To3],
+  const plan2 = useMemo<RunPlan>(
+    () => ({ prepare: s2Prepare, stepOne: s2StepOne, finalize: s2Finalize, nextStage: () => plan3 }),
+    [s2Prepare, s2StepOne, s2Finalize, plan3]
   );
 
-  const { lines, runState, progress, start, pause, resume, stop } =
+  const { lines, runState, progress, start, pause, resume, stop, lastPlan, nextPlan } =
     useSequentialRun({
       prepare: s1Prepare,
       stepOne: s1StepOne,
       finalize: s1Finalize,
-      nextStage: nextStage1To2,
+      nextStage: () => plan2,
       concurrency,
     });
 
@@ -343,14 +344,45 @@ export function Phase2Panel({
 
         <div className="flex flex-wrap items-center gap-4">
           <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={start}
-              disabled={running || recalcPending}
-              className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
-            >
-              {running ? "실행 중…" : "채점 실행"}
-            </button>
+            {running ? (
+              <button
+                type="button"
+                disabled
+                className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm opacity-60 cursor-not-allowed"
+              >
+                실행 중…
+              </button>
+            ) : runState === "aborted" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => start(lastPlan || undefined)}
+                  disabled={recalcPending}
+                  className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
+                >
+                  재시도
+                </button>
+                {nextPlan && (
+                  <button
+                    type="button"
+                    onClick={() => start(nextPlan)}
+                    disabled={recalcPending}
+                    className="border-2 border-black bg-white text-black px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
+                  >
+                    다음 작업으로
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => start()}
+                disabled={recalcPending}
+                className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
+              >
+                채점 실행
+              </button>
+            )}
             <button
               type="button"
               onClick={recalc}

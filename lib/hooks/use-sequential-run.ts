@@ -46,10 +46,12 @@ export function useSequentialRun(args: {
   lines: TermLine[];
   runState: RunState;
   progress: { done: number; total: number } | null;
-  start: () => void;
+  start: (overridePlan?: RunPlan) => void;
   pause: () => void;
   resume: () => void;
   stop: () => void;
+  lastPlan: RunPlan | null;
+  nextPlan: RunPlan | null;
 } {
   const {
     prepare,
@@ -65,6 +67,8 @@ export function useSequentialRun(args: {
   const [progress, setProgress] = useState<{ done: number; total: number } | null>(
     null,
   );
+  const [lastPlan, setLastPlan] = useState<RunPlan | null>(null);
+  const [nextPlan, setNextPlan] = useState<RunPlan | null>(null);
 
   // pause/stop은 ref 플래그로 루프에서 직접 읽는다(상태 지연 없이 즉시 반영).
   const runningRef = useRef(false);
@@ -75,7 +79,7 @@ export function useSequentialRun(args: {
     setLines((prev) => [...prev, { ts: nowTs(), level, text }]);
   }, []);
 
-  const start = useCallback(() => {
+  const start = useCallback((overridePlan?: RunPlan) => {
     if (runningRef.current) return; // runningRef로 이중 시작 방지
     runningRef.current = true;
     pauseRef.current = false;
@@ -84,21 +88,18 @@ export function useSequentialRun(args: {
     setProgress(null);
     setRunState("running");
 
+    setLastPlan(overridePlan ?? null);
+    setNextPlan(null);
+
     // start() 시점에 동시성을 고정 (1~3 클램프, 기본 1)
     const rawConcurrency = concurrencyArg ?? 1;
     const concurrency = Math.max(1, Math.min(3, Math.round(rawConcurrency)));
 
     // 첫 plan 조립: 훅 인자 nextStage와 plan의 nextStage 공존 처리
-    const firstPlan: RunPlan = { prepare, stepOne, finalize };
-    if (nextStage && firstPlan.nextStage) {
-      // 둘 다 있으면 훅 인자가 우선
-      append("system", "nextStage가 훅 인자와 plan 양쪽에 있습니다 — 훅 인자를 우선합니다.");
-      firstPlan.nextStage = nextStage;
-    } else if (nextStage) {
+    const firstPlan: RunPlan = overridePlan ?? { prepare, stepOne, finalize };
+    if (!overridePlan && nextStage) {
       firstPlan.nextStage = nextStage;
     }
-    // plan 자체의 nextStage는 prepare/stepOne/finalize에 포함되지 않으므로
-    // firstPlan에는 nextStage가 없다. 훅 인자에서 합류시킨다.
 
     const poolConfig: PoolConfig = {
       concurrency,
@@ -115,11 +116,23 @@ export function useSequentialRun(args: {
           isStopped: () => stopRef.current,
           onProgress: (done, total) => setProgress({ done, total }),
           onLog: append,
+          onStageChange: (current, next) => {
+            setLastPlan(current);
+            setNextPlan(next);
+          },
         },
         5, // 연쇄 상한 5스테이지
       );
 
-      setRunState(result.aborted ? "aborted" : "done");
+      if (result.aborted) {
+        setRunState("aborted");
+        if (result.lastPlan) setLastPlan(result.lastPlan);
+        if (result.nextPlan) setNextPlan(result.nextPlan);
+      } else {
+        setRunState("done");
+        setLastPlan(null);
+        setNextPlan(null);
+      }
       runningRef.current = false;
     })();
   }, [prepare, stepOne, finalize, nextStage, maxConsecutiveFailures, concurrencyArg, append]);
@@ -145,5 +158,5 @@ export function useSequentialRun(args: {
     append("system", "긴급 중단 — 처리분까지 반영하고 멈춥니다.");
   }, [append]);
 
-  return { lines, runState, progress, start, pause, resume, stop };
+  return { lines, runState, progress, start, pause, resume, stop, lastPlan, nextPlan };
 }
