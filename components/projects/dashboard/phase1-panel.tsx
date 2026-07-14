@@ -241,10 +241,10 @@ export function Phase1Panel({
   };
 
   const btn =
-    "rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white";
+    "border-4 border-black bg-neo-accent text-white px-5 py-2.5 font-black shadow-neo-md hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none active:translate-x-[4px] active:translate-y-[4px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer text-sm uppercase tracking-wide flex items-center gap-2";
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {/* ① 실행 컨트롤 */}
       <div className="flex flex-col gap-3">
         <OcrModelSelect
@@ -276,25 +276,25 @@ export function Phase1Panel({
           setDragOver(false);
           if (!uploadBusy) void handleFiles(e.dataTransfer.files);
         }}
-        className={`rounded-lg border-2 border-dashed px-6 py-8 text-center transition ${
+        className={`border-4 border-dashed px-6 py-10 text-center transition shadow-neo-sm ${
           dragOver
-            ? "border-zinc-500 bg-zinc-50 dark:bg-zinc-900"
-            : "border-zinc-300 dark:border-zinc-700"
+            ? "border-black bg-neo-secondary"
+            : "border-black bg-white"
         }`}
       >
-        <p className="text-sm text-zinc-500">
+        <p className="text-sm font-bold text-black">
           파일을 여기로 끌어다 놓거나
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={uploadBusy}
-            className="mx-1 underline underline-offset-2 hover:text-zinc-800 disabled:opacity-60 dark:hover:text-zinc-200"
+            className="mx-2 font-black underline underline-offset-4 text-black hover:text-neo-accent disabled:opacity-60 cursor-pointer"
           >
             선택
           </button>
           하세요. 업로드만 하고, 토큰은 [수합 & 매칭] 실행 때 소모됩니다.
         </p>
-        <p className="mt-1 text-xs text-zinc-400">
+        <p className="mt-2 text-xs font-bold text-black/60">
           xlsx · csv · docx · pdf · png/jpg (여러 개 가능)
         </p>
         <input
@@ -308,50 +308,50 @@ export function Phase1Panel({
       </div>
 
       {uploadBusy && (
-        <p className="text-sm text-zinc-500">
-          <span className="animate-pulse">● </span>
+        <p className="text-sm font-bold text-black">
+          <span className="animate-pulse text-neo-accent font-black">● </span>
           {uploadStatus || "처리 중…"}
         </p>
       )}
 
       {errors.length > 0 && (
-        <ul className="rounded-lg border border-red-200 p-3 text-sm text-red-700 dark:border-red-900 dark:text-red-400">
+        <ul className="border-4 border-black bg-red-100 p-4 text-sm font-bold text-red-700 shadow-neo-sm">
           {errors.map((e, i) => (
-            <li key={i}>{e}</li>
+            <li key={i} className="list-disc list-inside">{e}</li>
           ))}
         </ul>
       )}
 
       {/* ④ 업로드 파일 목록 */}
-      <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-semibold">업로드된 파일 ({files.length})</h3>
+      <div className="flex flex-col gap-3">
+        <h3 className="text-md font-black uppercase text-black">업로드된 파일 ({files.length})</h3>
         {files.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-zinc-300 px-6 py-8 text-center text-sm text-zinc-400 dark:border-zinc-700">
+          <p className="border-4 border-dashed border-black bg-white px-6 py-8 text-center text-sm font-bold text-black/50 shadow-neo-sm">
             아직 업로드된 파일이 없습니다.
           </p>
         ) : (
-          <ul className="flex flex-col gap-1.5">
+          <ul className="flex flex-col gap-2">
             {files.map((f) => (
               <li
                 key={f.path}
-                className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm dark:border-zinc-800"
+                className="flex flex-wrap items-center gap-3 border-4 border-black bg-white px-4 py-3 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all"
               >
                 <input
                   type="checkbox"
                   checked={checked.has(f.path)}
                   onChange={() => toggle(f.path)}
-                  className="h-4 w-4"
+                  className="h-5 w-5 border-4 border-black accent-black cursor-pointer"
                 />
-                <span className="flex-1 truncate" title={f.filename}>
+                <span className="flex-1 truncate text-black font-bold" title={f.filename}>
                   {f.filename}
                 </span>
                 {f.createdAt && (
-                  <span className="text-xs text-zinc-400">
+                  <span className="text-xs font-bold text-black/60">
                     {new Date(f.createdAt).toLocaleString("ko-KR")}
                   </span>
                 )}
                 {f.ingested && (
-                  <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs text-emerald-700 dark:bg-emerald-950 dark:text-emerald-400">
+                  <span className="border-2 border-black bg-[#C8E6C9] px-2 py-0.5 text-xs font-black text-black">
                     수합됨
                   </span>
                 )}
@@ -359,7 +359,7 @@ export function Phase1Panel({
                   type="button"
                   onClick={() => void remove(f.path, f.filename, f.ingested)}
                   disabled={running}
-                  className="rounded border border-zinc-300 px-2 py-0.5 text-xs text-zinc-500 hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                  className="border-2 border-black bg-neo-accent text-white px-3 py-1 text-xs font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all disabled:opacity-40 cursor-pointer"
                 >
                   삭제
                 </button>
@@ -370,31 +370,30 @@ export function Phase1Panel({
       </div>
 
       {/* ⑤ [수합 & 매칭] 실행 컨트롤 영역 (이동됨) */}
-      <div className="flex flex-wrap items-center gap-3 border-t border-zinc-100 pt-3 dark:border-zinc-800">
+      <div className="flex flex-wrap items-center gap-4 border-t-4 border-black pt-4">
         <button type="button" onClick={onRun} disabled={running || preparing} className={btn}>
           {running ? "수합·매칭 중…" : preparing ? "준비 중…" : "수합 & 매칭"}
         </button>
         {progress && running && (
-          <span className="text-xs font-medium text-zinc-500">
+          <span className="border-2 border-black bg-neo-muted px-2 py-1 text-xs font-black text-black shadow-neo-sm">
             진행 {progress.done}/{progress.total}
           </span>
         )}
-        <span className="text-xs text-zinc-400">
-          체크한 파일을 수합한 뒤 자동으로 학생 매칭을 이어서 실행합니다. 진행 중 일시정지·재개·긴급
-          중단할 수 있고, 중단해도 처리분은 반영됩니다.
+        <span className="text-xs font-bold text-black/70 flex-1">
+          체크한 파일을 수합한 뒤 자동으로 학생 매칭을 이어서 실행합니다. 진행 중 일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다.
         </span>
       </div>
 
       {/* ⑥ 확인 대기 배지 + 매칭·확인 링크 */}
-      <div className="flex items-center gap-3 text-sm">
+      <div className="flex items-center gap-3 text-sm mt-2 border-t-2 border-black pt-3">
         {pendingCount > 0 && (
-          <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+          <span className="border-2 border-black bg-neo-secondary px-3 py-1 text-xs font-black text-black shadow-neo-sm rotate-[1deg]">
             확인 대기 {pendingCount}건
           </span>
         )}
         <Link
           href={`/projects/${projectId}/submissions`}
-          className="text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+          className="font-black text-black underline underline-offset-4 hover:text-neo-accent"
         >
           매칭·확인 →
         </Link>

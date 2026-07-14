@@ -118,17 +118,17 @@ export function Phase3Panel({
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {/* ① 실행 컨트롤 행 */}
-      <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="rounded-full bg-zinc-100 px-2.5 py-1 font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+      <div className="flex flex-col gap-4 border-4 border-black bg-[#FFFDF5] p-5 shadow-neo-sm mt-4">
+        <div className="flex flex-wrap items-center gap-3 text-xs font-bold">
+          <span className="border-2 border-black bg-white px-2.5 py-1 text-black">
             생성: {genName} / {genTarget?.model ?? "미설정"} · 검증: {verName} /{" "}
             {verTarget?.model ?? "미설정"}
           </span>
           {showRecommend && recommendation && (
-            <span className="rounded-full bg-sky-100 px-2.5 py-1 font-medium text-sky-800 dark:bg-sky-950 dark:text-sky-300">
-              추천: {recommendation.providerName} / {recommendation.model} (가격 대비 성능)
+            <span className="border-2 border-black bg-[#E3F2FD] px-2.5 py-1 text-black font-bold">
+              추천: {recommendation.providerName} / {recommendation.model} (가성비)
             </span>
           )}
           {showRecommend && (
@@ -136,40 +136,39 @@ export function Phase3Panel({
               type="button"
               onClick={onApplyRecommend}
               disabled={applyPending}
-              className="rounded-md border border-sky-300 px-2.5 py-1 font-medium text-sky-700 hover:bg-sky-50 disabled:opacity-60 dark:border-sky-800 dark:text-sky-300 dark:hover:bg-sky-950"
+              className="border-2 border-black bg-neo-accent text-white px-3 py-1 font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all cursor-pointer"
             >
               {applyPending ? "적용 중…" : "적용"}
             </button>
           )}
           <Link
             href={`/projects/${projectId}/settings`}
-            className="text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
+            className="font-black text-black underline underline-offset-4 hover:text-neo-accent"
           >
             모델 변경
           </Link>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             onClick={start}
             disabled={running}
-            className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+            className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
           >
             {running ? "생성 중…" : "생기부 일괄 생성"}
           </button>
           {progress && running && (
-            <span className="text-xs font-medium text-zinc-500">
+            <span className="border-2 border-black bg-neo-muted px-2 py-1 text-xs font-black text-black shadow-neo-sm">
               진행 {progress.done}/{progress.total}
             </span>
           )}
         </div>
 
-        <p className="text-xs text-zinc-500">
-          반영된 제출물·교사 메모가 있는 학생만 대상입니다. 학생 한 명씩 격리 생성하며(INV-1),
-          진행 중 일시정지·재개·긴급 중단할 수 있습니다. 1건마다 작업결과표가 갱신됩니다.
+        <p className="text-xs font-bold text-black/70">
+          반영된 제출물·교사 메모가 있는 학생만 대상입니다. 학생 한 명씩 격리 생성하며 (INV-1), 진행 중 일시정지·재개·긴급 중단할 수 있습니다. 1건마다 작업결과표가 갱신됩니다.
         </p>
-        {applyError && <p className="text-xs text-red-600">{applyError}</p>}
+        {applyError && <p className="border-4 border-black bg-red-100 p-4 text-xs font-bold text-red-700 shadow-neo-sm">{applyError}</p>}
       </div>
 
       {/* ② 실행 터미널 (상시) */}
@@ -183,11 +182,11 @@ export function Phase3Panel({
       />
 
       {/* ③ 세부 화면 링크 카드 */}
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-4">
         <LinkCard
           href={`/projects/${projectId}/profile`}
           title="프롬프트 프로필 →"
-          desc="생기부 작성 참고·금지사항(계정 기본+오버라이드)"
+          desc="생기부 작성 참고·금지사항 (계정 기본+오버라이드)"
         />
         <LinkCard
           href={`/projects/${projectId}/records`}
@@ -197,9 +196,9 @@ export function Phase3Panel({
       </div>
 
       {/* ④ 내보내기 안내 */}
-      <p className="text-xs text-zinc-400">
-        생기부 내보내기(xlsx/csv/md, 전체/선택)는 아래{" "}
-        <a href="#worksheet" className="underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-300">
+      <p className="text-xs font-bold text-black/60 mt-2">
+        생기부 내보내기 (xlsx/csv/md, 전체/선택)는 아래{" "}
+        <a href="#worksheet" className="font-black text-black underline underline-offset-4 hover:text-neo-accent">
           작업결과표
         </a>
         의 [다운로드]를 사용하세요.
@@ -220,10 +219,10 @@ function LinkCard({
   return (
     <Link
       href={href}
-      className="flex flex-col rounded-lg border border-zinc-200 p-4 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+      className="flex flex-col border-4 border-black bg-white p-5 shadow-neo-sm hover:-translate-y-0.5 hover:shadow-neo-md transition-all duration-200"
     >
-      <span className="font-medium">{title}</span>
-      <span className="mt-1 text-xs text-zinc-500">{desc}</span>
+      <span className="text-md font-black uppercase tracking-wide text-black">{title}</span>
+      <span className="mt-1 text-xs font-bold text-black/70">{desc}</span>
     </Link>
   );
 }

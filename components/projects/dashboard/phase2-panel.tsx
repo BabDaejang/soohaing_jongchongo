@@ -326,28 +326,28 @@ export function Phase2Panel({
   const pendingCount = matchedIncluded - scoredSubmissions;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       {/* ① 실행 컨트롤 행 */}
-      <div className="flex flex-col gap-3 rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="rounded-full bg-zinc-100 px-2.5 py-1 font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+      <div className="flex flex-col gap-4 border-4 border-black bg-[#FFFDF5] p-5 shadow-neo-sm mt-4">
+        <div className="flex flex-wrap items-center gap-3 text-xs font-bold">
+          <span className="border-2 border-black bg-white px-2.5 py-1 text-black">
             평가 모델: {providerName} / {model}
           </span>
           <Link
             href={`/projects/${projectId}/settings`}
-            className="text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
+            className="font-black text-black underline underline-offset-4 hover:text-neo-accent"
           >
             모델 변경
           </Link>
         </div>
 
         <div className="flex flex-wrap items-center gap-4">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <button
               type="button"
               onClick={start}
               disabled={running || recalcPending}
-              className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+              className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
             >
               {running ? "실행 중…" : "채점 실행"}
             </button>
@@ -355,14 +355,14 @@ export function Phase2Panel({
               type="button"
               onClick={recalc}
               disabled={recalcPending || running}
-              className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+              className="border-2 border-black bg-white text-black px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
             >
               재계산
             </button>
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
-            <label htmlFor="concurrency-select" className="text-zinc-500 font-medium">
+          <div className="flex items-center gap-2 text-xs font-bold">
+            <label htmlFor="concurrency-select" className="text-black">
               동시 처리:
             </label>
             <select
@@ -370,57 +370,50 @@ export function Phase2Panel({
               value={concurrency}
               onChange={(e) => setConcurrency(Number(e.target.value))}
               disabled={running}
-              className="rounded-md border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+              className="border-4 border-black bg-white px-2.5 py-1 text-sm font-bold focus:bg-neo-secondary focus:outline-none transition-all"
             >
               <option value={1}>1건씩</option>
               <option value={2}>2건씩 (기본)</option>
               <option value={3}>3건씩</option>
             </select>
-            <span className="text-[11px] text-zinc-400">
-              (API 키 등급이 낮아 요청 제한(429)이 잦으면 1건을 권장합니다)
+            <span className="text-[11px] text-black/60">
+              (요청 제한(429)이 잦으면 1건을 권장합니다)
             </span>
           </div>
 
           {needsRecalc && (
-            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-950 dark:text-amber-400">
+            <span className="border-2 border-black bg-neo-secondary text-black px-2.5 py-1 text-xs font-black shadow-neo-sm animate-pulse">
               ● 재계산 필요
             </span>
           )}
           <Link
             href="/factsheets"
-            className="rounded-md border border-zinc-300 px-4 py-2 text-sm hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+            className="border-2 border-black bg-neo-secondary text-black px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer"
           >
             도서팩트시트 →
           </Link>
         </div>
 
         {suspectCount > 0 && (
-          <div className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="rounded-full bg-red-100 px-2.5 py-1 font-medium text-red-700 dark:bg-red-950 dark:text-red-400">
+          <div className="border-4 border-black bg-red-100 p-4 text-xs font-bold text-red-700 shadow-neo-sm flex items-center gap-3 flex-wrap">
+            <span className="border-2 border-black bg-white px-2.5 py-0.5 text-red-700 font-black">
               ⚠ 진실성 의심 {suspectCount}건
             </span>
             <Link
               href={`/projects/${projectId}/submissions`}
-              className="text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
+              className="font-black text-black underline underline-offset-4 hover:text-neo-accent"
             >
               제출물 상세에서 근거 보기 →
             </Link>
-            <span className="text-zinc-400">
-              의심은 플래그일 뿐 — 채점은 진행됩니다(자동 감점·제외 없음).
+            <span className="text-black/80">
+              의심은 플래그일 뿐 — 채점은 진행됩니다 (자동 감점·제외 없음).
             </span>
           </div>
         )}
 
-        <p className="text-xs text-zinc-500">
-          [채점 실행]은 <b>진실성 검증 → 채점</b> 순으로 진행됩니다. 진실성 검증은 인용 출처를
-          식별해 도서팩트시트·인용 URL 원문과 대조하며(의심이어도 채점은 진행), 이어서 채점
-          스테이지가 실행됩니다. 채점 대상(반영 체크 + 매칭 확정) 제출물 {matchedIncluded}건 중{" "}
-          {scoredSubmissions}건 채점됨
-          {pendingCount > 0 && ` · 미채점 ${pendingCount}건`}. 두 스테이지 모두 건별로 실행되며
-          진행 중 일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다. temperature를
-          지원하는 모델은 0으로 고정하며(gpt-5 계열 미지원), 내용이 바뀌지 않은 제출물은
-          재검증·재채점하지 않습니다(증분). 표시 점수는 초기 확정 인원(15~25명) 채점 후 999점
-          만점으로 확정됩니다.
+        <p className="text-xs font-bold text-black/70">
+          [채점 실행]은 <b>진실성 검증 → 채점</b> 순으로 진행됩니다. 진실성 검증은 인용 출처를 식별해 도서팩트시트·인용 URL 원문과 대조하며(의심이어도 채점은 진행), 이어서 채점 스테이지가 실행됩니다. 채점 대상(반영 체크 + 매칭 확정) 제출물 {matchedIncluded}건 중 {scoredSubmissions}건 채점됨
+          {pendingCount > 0 && ` · 미채점 ${pendingCount}건`}. 두 스테이지 모두 건별로 실행되며 진행 중 일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다. 내용이 바뀌지 않은 제출물은 재검증·재채점하지 않습니다 (증분). 표시 점수는 초기 확정 인원(15~25명) 채점 후 999점 만점으로 확정됩니다.
         </p>
       </div>
 
@@ -434,67 +427,65 @@ export function Phase2Panel({
         onStop={stop}
       />
 
-      {msg && <p className="text-xs text-emerald-700 dark:text-emerald-400">{msg}</p>}
-      {error && <p className="text-xs text-red-600">{error}</p>}
+      {msg && <p className="text-sm font-black text-emerald-700">{msg}</p>}
+      {error && <p className="border-4 border-black bg-red-100 p-4 text-xs font-bold text-red-700 shadow-neo-sm">{error}</p>}
 
       {/* ③ 등급제 토글 + 등급 분포 요약 */}
-      <div className="flex flex-col gap-3">
-        <div className="flex items-center gap-2 text-sm">
-          <span className="text-zinc-500">등급제</span>
-          <div className="inline-flex overflow-hidden rounded-md border border-zinc-300 dark:border-zinc-700">
+      <div className="flex flex-col gap-4">
+        <div className="flex items-center gap-3 text-sm font-bold">
+          <span className="text-black font-black uppercase">등급제 설정</span>
+          <div className="inline-flex border-2 border-black shadow-neo-sm overflow-hidden">
             {(["grade5", "grade9"] as const).map((g) => (
               <button
                 key={g}
                 type="button"
                 onClick={() => onToggleScheme(g)}
-                className={`px-3 py-1 ${
+                className={`px-3 py-1 text-sm font-black transition-all cursor-pointer ${
                   scheme === g
-                    ? "bg-zinc-800 text-white dark:bg-zinc-200 dark:text-zinc-900"
-                    : "bg-white text-zinc-600 dark:bg-zinc-900 dark:text-zinc-300"
+                    ? "bg-black text-white"
+                    : "bg-white text-black hover:bg-neo-muted/20"
                 }`}
               >
                 {g === "grade5" ? "5등급" : "9등급"}
               </button>
             ))}
           </div>
-          <span className="text-xs text-zinc-400">화면 즉시 반영(점수에서 파생)</span>
+          <span className="text-xs font-bold text-black/60">화면 즉시 반영 (점수에서 파생)</span>
         </div>
 
         {effectiveScores.length === 0 ? (
-          <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-3 text-sm text-zinc-500 dark:border-zinc-700">
-            아직 확정된 표시 점수가 없습니다. [채점 실행]으로 제출물을 채점하세요(초기 확정
-            인원 채점 후 등급 분포가 나타납니다).
+          <p className="border-4 border-dashed border-black bg-white px-4 py-4 text-sm font-bold text-black/50 shadow-neo-sm">
+            아직 확정된 표시 점수가 없습니다. [채점 실행]으로 제출물을 채점하세요 (초기 확정 인원 채점 후 등급 분포가 나타납니다).
           </p>
         ) : (
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-3">
             {distribution.map((b, i) => (
               <div
                 key={i}
-                className="rounded-md border border-zinc-200 px-3 py-2 text-xs dark:border-zinc-800"
+                className="border-2 border-black bg-white px-3 py-2 text-xs font-bold shadow-neo-sm"
               >
-                <span className="font-semibold">{i + 1}등급</span>{" "}
-                <span className="text-zinc-500">· {b.n}명</span>
+                <span className="font-black text-black">{i + 1}등급</span>{" "}
+                <span className="text-black/70">· {b.n}명</span>
                 {b.n > 0 && (
-                  <span className="text-zinc-400"> · 경계 {fmt(b.min)}점</span>
+                  <span className="text-black/60"> · 경계 {fmt(b.min)}점</span>
                 )}
               </div>
             ))}
           </div>
         )}
 
-        <p className="text-xs text-zinc-400">
-          등급은 점수에서 파생 계산되며 직접 수정하지 않습니다. 교사 개입(점수 보정)은 아래
-          작업결과표의 <b>반영 점수</b> 셀에서 사유와 함께 조정하세요.
+        <p className="text-xs font-bold text-black/60">
+          등급은 점수에서 파생 계산되며 직접 수정하지 않습니다. 교사 개입 (점수 보정)은 아래 작업결과표의 <b>반영 점수</b> 셀에서 사유와 함께 조정하세요.
         </p>
       </div>
 
       {/* ④ 루브릭 편집 링크 카드 */}
       <Link
         href={`/projects/${projectId}/rubric`}
-        className="flex flex-col rounded-lg border border-zinc-200 p-4 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+        className="flex flex-col border-4 border-black bg-white p-5 shadow-neo-sm hover:-translate-y-0.5 hover:shadow-neo-md transition-all duration-200"
       >
-        <span className="font-medium">평가 루브릭 편집 →</span>
-        <span className="mt-1 text-xs text-zinc-500">
+        <span className="text-md font-black uppercase tracking-wide text-black">평가 루브릭 편집 →</span>
+        <span className="mt-1 text-xs font-bold text-black/70">
           채점 기준·배점·가중치 (현재 {criteriaCount}개 기준) · 전담 모델 · 평가계획서 AI 분석
         </span>
       </Link>

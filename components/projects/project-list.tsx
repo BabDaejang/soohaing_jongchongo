@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import Link from "next/link";
+import { Plus, Trash2, Edit, Save, X } from "lucide-react";
 import {
   createProject,
   updateProject,
@@ -27,21 +28,22 @@ export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
     creatingRef.current = true;
     try {
       await createProject(formData);
+      setShowCreate(false);
     } finally {
       creatingRef.current = false;
     }
   }
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-6">
       <div className="flex justify-end">
         {!showCreate && (
           <button
             type="button"
             onClick={() => setShowCreate(true)}
-            className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+            className="border-4 border-black bg-neo-secondary text-black px-5 py-2.5 font-black shadow-neo-md hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none active:translate-x-[4px] active:translate-y-[4px] active:shadow-none transition-all cursor-pointer flex items-center gap-2 uppercase tracking-wide"
           >
-            + 새 프로젝트
+            <Plus size={18} strokeWidth={3} /> 새 프로젝트
           </button>
         )}
       </div>
@@ -49,26 +51,29 @@ export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
       {showCreate && (
         <form
           action={handleCreate}
-          className="rounded-lg border border-dashed border-zinc-300 p-4 dark:border-zinc-700"
+          className="border-4 border-black bg-white p-6 shadow-neo-md rotate-[0.5deg]"
         >
-          <div className="flex flex-col gap-3">
-            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          <div className="flex flex-col gap-4">
+            <h3 className="text-lg font-black uppercase flex items-center gap-2 border-b-2 border-black pb-2">
+              <Plus size={18} strokeWidth={3} /> 새 수행평가 프로젝트 생성
+            </h3>
+            <label className="flex flex-col gap-1 text-sm font-black uppercase text-black">
               프로젝트 이름
               <input
                 name="name"
                 required
                 autoFocus
                 placeholder="예: 1학기 과학 탐구 보고서"
-                className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className="w-full border-4 border-black bg-white px-3 py-2 text-base font-bold placeholder:text-black/40 focus:bg-neo-secondary focus:shadow-neo-sm focus:outline-none transition-all"
               />
             </label>
-            <label className="flex flex-col gap-1 text-xs text-zinc-500">
+            <label className="flex flex-col gap-1 text-sm font-black uppercase text-black">
               설명 (선택)
               <textarea
                 name="description"
                 rows={2}
                 placeholder="이 수행평가에 대한 간단한 설명"
-                className="resize-y rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+                className="w-full resize-y border-4 border-black bg-white px-3 py-2 text-base font-bold placeholder:text-black/40 focus:bg-neo-secondary focus:shadow-neo-sm focus:outline-none transition-all"
               />
             </label>
           </div>
@@ -77,12 +82,11 @@ export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
       )}
 
       {projects.length === 0 && !showCreate ? (
-        <div className="rounded-lg border border-dashed border-zinc-300 px-6 py-12 text-center text-sm text-zinc-400 dark:border-zinc-700">
-          아직 프로젝트가 없습니다. 위 &ldquo;새 프로젝트&rdquo; 버튼으로
-          첫 수행평가를 시작하세요.
+        <div className="border-4 border-dashed border-black bg-white px-6 py-12 text-center font-bold text-black/60 shadow-neo-md">
+          아직 프로젝트가 없습니다. 우측 상단의 &ldquo;새 프로젝트&rdquo; 버튼으로 첫 수행평가를 시작하세요.
         </div>
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2">
+        <ul className="grid gap-6 sm:grid-cols-2">
           {projects.map((p) => (
             <ProjectCard key={p.id} project={p} />
           ))}
@@ -92,26 +96,25 @@ export function ProjectList({ projects }: { projects: ProjectSummary[] }) {
   );
 }
 
-// 생성 폼 하단 버튼 — useFormStatus는 form의 자식에서만 pending을 읽을 수 있어 분리.
-// 제출 중에는 취소(폼 언마운트 후 서버에서 생성이 계속 진행돼 혼란)도 함께 막는다.
+// 생성 폼 하단 버튼
 function CreateFormFooter({ onCancel }: { onCancel: () => void }) {
   const { pending } = useFormStatus();
   return (
-    <div className="mt-3 flex justify-end gap-2">
+    <div className="mt-4 flex justify-end gap-3 border-t-2 border-black pt-4">
       <button
         type="button"
         onClick={onCancel}
         disabled={pending}
-        className="rounded-md px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-800 disabled:opacity-60 dark:hover:text-zinc-200"
+        className="border-2 border-black bg-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer flex items-center gap-1"
       >
-        취소
+        <X size={16} strokeWidth={3} /> 취소
       </button>
       <button
         type="submit"
         disabled={pending}
-        className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+        className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer flex items-center gap-1"
       >
-        {pending ? "만드는 중…" : "만들기"}
+        <Save size={16} strokeWidth={3} /> {pending ? "만드는 중…" : "만들기"}
       </button>
     </div>
   );
@@ -122,40 +125,43 @@ function ProjectCard({ project }: { project: ProjectSummary }) {
 
   if (editing) {
     return (
-      <li className="rounded-lg border border-zinc-200 p-4 dark:border-zinc-800">
-        <form action={updateProject} className="flex flex-col gap-3">
+      <li className="border-4 border-black bg-white p-5 shadow-neo-md rotate-[-0.5deg]">
+        <form action={updateProject} className="flex flex-col gap-4">
           <input type="hidden" name="projectId" value={project.id} />
-          <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          <h3 className="text-md font-black uppercase flex items-center gap-2 border-b-2 border-black pb-2">
+            <Edit size={16} strokeWidth={3} /> 프로젝트 정보 수정
+          </h3>
+          <label className="flex flex-col gap-1 text-sm font-black uppercase text-black">
             이름
             <input
               name="name"
               required
               defaultValue={project.name}
-              className="rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              className="w-full border-4 border-black bg-white px-3 py-2 text-base font-bold focus:bg-neo-secondary focus:shadow-neo-sm focus:outline-none transition-all"
             />
           </label>
-          <label className="flex flex-col gap-1 text-xs text-zinc-500">
+          <label className="flex flex-col gap-1 text-sm font-black uppercase text-black">
             설명
             <textarea
               name="description"
               rows={2}
               defaultValue={project.description ?? ""}
-              className="resize-y rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-800 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
+              className="w-full resize-y border-4 border-black bg-white px-3 py-2 text-base font-bold focus:bg-neo-secondary focus:shadow-neo-sm focus:outline-none transition-all"
             />
           </label>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-3 border-t-2 border-black pt-4">
             <button
               type="button"
               onClick={() => setEditing(false)}
-              className="rounded-md px-3 py-1.5 text-sm text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+              className="border-2 border-black bg-white px-3 py-1.5 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer flex items-center gap-1"
             >
-              취소
+              <X size={14} strokeWidth={3} /> 취소
             </button>
             <button
               type="submit"
-              className="rounded-md bg-zinc-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+              className="border-2 border-black bg-neo-accent text-white px-3 py-1.5 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer flex items-center gap-1"
             >
-              저장
+              <Save size={14} strokeWidth={3} /> 저장
             </button>
           </div>
         </form>
@@ -164,22 +170,24 @@ function ProjectCard({ project }: { project: ProjectSummary }) {
   }
 
   return (
-    <li className="group relative flex flex-col rounded-lg border border-zinc-200 transition hover:border-zinc-300 dark:border-zinc-800 dark:hover:border-zinc-700">
-      <Link href={`/projects/${project.id}`} className="flex-1 p-4">
-        <div className="font-medium">{project.name}</div>
+    <li className="group relative flex flex-col border-4 border-black bg-white shadow-neo-md hover:-translate-y-1.5 hover:shadow-neo-lg transition-all duration-200">
+      <Link href={`/projects/${project.id}`} className="flex-1 p-5">
+        <div className="text-xl font-black uppercase tracking-tight text-black group-hover:text-neo-accent transition-colors">
+          {project.name}
+        </div>
         {project.description && (
-          <p className="mt-1 line-clamp-2 text-sm text-zinc-500">
+          <p className="mt-2 line-clamp-2 text-sm font-bold text-black/70">
             {project.description}
           </p>
         )}
       </Link>
-      <div className="flex justify-end gap-2 border-t border-zinc-100 px-4 py-2 dark:border-zinc-800">
+      <div className="flex justify-end gap-3 border-t-4 border-black bg-neo-muted/10 px-5 py-3">
         <button
           type="button"
           onClick={() => setEditing(true)}
-          className="rounded-md border border-zinc-300 px-2 py-1 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+          className="border-2 border-black bg-neo-secondary px-3 py-1.5 text-xs font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer flex items-center gap-1 text-black"
         >
-          수정
+          <Edit size={12} strokeWidth={3} /> 수정
         </button>
         <form
           action={deleteProject}
@@ -196,9 +204,9 @@ function ProjectCard({ project }: { project: ProjectSummary }) {
           <input type="hidden" name="projectId" value={project.id} />
           <button
             type="submit"
-            className="rounded-md border border-red-300 px-2 py-1 text-xs text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950"
+            className="border-2 border-black bg-neo-accent text-white px-3 py-1.5 text-xs font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer flex items-center gap-1"
           >
-            삭제
+            <Trash2 size={12} strokeWidth={3} /> 삭제
           </button>
         </form>
       </div>

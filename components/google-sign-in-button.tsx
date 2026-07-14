@@ -27,7 +27,7 @@ export function GoogleSignInButton() {
       type="button"
       onClick={handleSignIn}
       disabled={loading}
-      className="rounded-lg border border-zinc-300 bg-white px-6 py-3 text-sm font-medium text-zinc-800 shadow-sm transition hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:hover:bg-zinc-800"
+      className="border-4 border-black bg-neo-secondary text-black px-6 py-3.5 text-base font-black shadow-neo-md hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-none active:translate-x-[4px] active:translate-y-[4px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer uppercase tracking-wider"
     >
       {loading ? "이동 중…" : "Google로 로그인"}
     </button>

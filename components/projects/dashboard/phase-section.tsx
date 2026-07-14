@@ -19,15 +19,15 @@ export function PhaseSection({
   children: ReactNode;
 }) {
   return (
-    <section id={id} className="mx-auto mb-12 w-full max-w-4xl scroll-mt-6">
-      <div className="mb-4 flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-sm font-semibold text-white dark:bg-zinc-200 dark:text-zinc-900">
+    <section id={id} className="mx-auto mb-16 w-full max-w-4xl scroll-mt-6 border-4 border-black bg-white p-6 shadow-neo-md rotate-[0.2deg]">
+      <div className="mb-6 flex items-start justify-between gap-3 border-b-4 border-black pb-4">
+        <div className="flex items-start gap-4">
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center border-4 border-black bg-neo-accent text-lg font-black text-white shadow-neo-sm rotate-[-3deg]">
             {step}
           </span>
           <div>
-            <h2 className="text-lg font-semibold">{title}</h2>
-            {desc && <p className="mt-0.5 text-sm text-zinc-500">{desc}</p>}
+            <h2 className="text-xl font-black uppercase tracking-tight text-black">{title}</h2>
+            {desc && <p className="mt-1 text-sm font-bold text-black/70">{desc}</p>}
           </div>
         </div>
         <button
@@ -37,12 +37,12 @@ export function PhaseSection({
               .getElementById("worksheet")
               ?.scrollIntoView({ behavior: "smooth" })
           }
-          className="shrink-0 rounded-md border border-zinc-300 px-2.5 py-1 text-xs text-zinc-600 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
+          className="shrink-0 border-2 border-black bg-neo-secondary px-3 py-1.5 text-xs font-bold text-black shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer"
         >
           작업결과표 바로보기
         </button>
       </div>
-      {children}
+      <div className="rotate-[-0.2deg]">{children}</div>
     </section>
   );
 }

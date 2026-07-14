@@ -13,7 +13,7 @@ import type { ModelRouting, RoutingKey } from "@/lib/llm/types";
 const CUSTOM = "__custom__";
 
 const selectClass =
-  "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm text-zinc-800 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100";
+  "border-4 border-black bg-white px-3 py-2 text-sm font-bold text-black disabled:opacity-50 focus:bg-neo-secondary focus:outline-none transition-all";
 
 const PURPOSE_LABELS: Record<RoutingKey, string> = {
   extract: "추출·매칭",
@@ -108,22 +108,20 @@ export function DefaultModelPicker({
   }
 
   return (
-    <div className="flex flex-col gap-4 rounded-lg border border-zinc-200 p-5 dark:border-zinc-800">
+    <div className="flex flex-col gap-5 border-4 border-black bg-[#FFFDF5] p-5 shadow-neo-sm mt-4">
       <div>
-        <h3 className="text-sm font-semibold">기본 AI 모델</h3>
-        <p className="mt-1 text-xs text-zinc-500">
-          수합 OCR·평가·생기부에 공통으로 쓸 기본 모델입니다. 용도별 세부 지정은
-          프로젝트 설정의 모델 라우팅에서 조정할 수 있습니다.
+        <h3 className="text-md font-black uppercase text-black">기본 AI 모델</h3>
+        <p className="mt-1 text-xs font-bold text-black/70">
+          수합 OCR·평가·생기부에 공통으로 쓸 기본 모델입니다. 용도별 세부 지정은 프로젝트 설정의 모델 라우팅에서 조정할 수 있습니다.
         </p>
       </div>
 
       {noUsable ? (
-        <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
-          등록된 API 키가 없어 기본 모델을 선택할 수 없습니다. 위에서 개인 키를
-          먼저 등록하세요.
+        <p className="border-4 border-black bg-[#FFF9C4] p-4 text-xs font-bold text-black shadow-neo-sm">
+          ⚠️ 등록된 API 키가 없어 기본 모델을 선택할 수 없습니다. 위에서 개인 키를 먼저 등록하세요.
         </p>
       ) : (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <select
             value={provider}
             onChange={(e) => setProvider(e.target.value)}
@@ -165,7 +163,7 @@ export function DefaultModelPicker({
             type="button"
             onClick={onSave}
             disabled={pending || !provider || !model}
-            className="rounded-md bg-zinc-800 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900 dark:hover:bg-white"
+            className="border-2 border-black bg-neo-accent text-white px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all disabled:opacity-60 cursor-pointer"
           >
             {pending ? "저장 중…" : "기본 모델로 저장"}
           </button>
@@ -173,31 +171,31 @@ export function DefaultModelPicker({
       )}
 
       {!noUsable && staleCatalog && (
-        <p className="text-xs text-zinc-400">
+        <p className="text-xs font-bold text-black/60">
           모델 목록이 비어 있습니다. 계정 옵션에서 [모델 갱신]을 눌러 주세요.
         </p>
       )}
 
       {error && (
-        <p className="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-950 dark:text-red-300">
+        <p className="border-4 border-black bg-red-100 p-4 text-xs font-bold text-red-700 shadow-neo-sm">
           {error}
         </p>
       )}
 
       {/* 저장 성공 후 다른 페이즈에 개별 모델이 있으면 교체를 묻는다(사용자 지시). */}
       {differing && differing.length > 0 && (
-        <div className="flex flex-col gap-2 rounded-md border border-sky-300 bg-sky-50 px-3 py-3 text-xs dark:border-sky-800 dark:bg-sky-950">
-          <p className="text-sky-900 dark:text-sky-200">
+        <div className="flex flex-col gap-3 border-4 border-black bg-[#E3F2FD] p-4 text-xs font-bold text-black shadow-neo-sm">
+          <p className="font-black text-black">
             다른 페이즈에 개별 선택된 모델이 있습니다:
           </p>
-          <ul className="ml-4 list-disc text-sky-800 dark:text-sky-300">
+          <ul className="ml-4 list-disc font-bold text-black/80">
             {differing.map((d) => (
               <li key={d.key}>
                 {d.label}: {d.providerName} · {d.model}
               </li>
             ))}
           </ul>
-          <p className="text-sky-900 dark:text-sky-200">
+          <p className="font-bold text-black">
             전부 기본 AI 모델로 교체할까요?
           </p>
           <div className="mt-1 flex gap-2">
@@ -205,7 +203,7 @@ export function DefaultModelPicker({
               type="button"
               onClick={onApplyAll}
               disabled={pending}
-              className="rounded-md bg-sky-700 px-3 py-1.5 font-medium text-white hover:bg-sky-600 disabled:opacity-60"
+              className="border-2 border-black bg-[#1565C0] text-white px-3 py-1.5 font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none cursor-pointer"
             >
               {pending ? "교체 중…" : "전부 교체"}
             </button>
@@ -213,7 +211,7 @@ export function DefaultModelPicker({
               type="button"
               onClick={() => setDiffering(null)}
               disabled={pending}
-              className="rounded-md border border-sky-300 px-3 py-1.5 text-sky-800 hover:bg-sky-100 disabled:opacity-60 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900"
+              className="border-2 border-black bg-white text-black px-3 py-1.5 font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none cursor-pointer"
             >
               개별 설정 유지
             </button>
@@ -222,17 +220,17 @@ export function DefaultModelPicker({
       )}
 
       {differing && differing.length === 0 && (
-        <p className="text-xs text-emerald-600 dark:text-emerald-400">
+        <p className="text-xs font-black text-emerald-700">
           저장되었습니다.
         </p>
       )}
 
       {/* 현재 기본값과 4개 용도 요약(항상 표시) */}
-      <div className="border-t border-zinc-100 pt-3 text-xs text-zinc-500 dark:border-zinc-800">
-        <p>
+      <div className="border-t-4 border-black pt-4 text-xs font-bold text-black/80">
+        <p className="font-black text-black">
           현재 기본 AI 모델:{" "}
           {routing.default ? (
-            <span className="font-medium text-zinc-700 dark:text-zinc-200">
+            <span className="font-black text-neo-accent">
               {nameById.get(routing.default.provider_id) ??
                 routing.default.provider_id}{" "}
               · {routing.default.model}
@@ -241,15 +239,17 @@ export function DefaultModelPicker({
             <span className="italic">미설정</span>
           )}
         </p>
-        <ul className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5">
+        <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
           {PURPOSE_ORDER.map((key) => {
             const t = routing[key];
             return (
-              <li key={key}>
+              <li key={key} className="border-2 border-black bg-white px-2 py-0.5 shadow-neo-sm">
                 {PURPOSE_LABELS[key]}:{" "}
-                {t
-                  ? `${nameById.get(t.provider_id) ?? t.provider_id} · ${t.model}`
-                  : "미설정"}
+                <span className="font-black">
+                  {t
+                    ? `${nameById.get(t.provider_id) ?? t.provider_id} · ${t.model}`
+                    : "미설정"}
+                </span>
               </li>
             );
           })}

@@ -153,17 +153,17 @@ export default async function ProjectHomePage({
   }
 
   return (
-    <main className="w-full flex-1 px-4 py-10">
-      <header className="mx-auto mb-10 w-full max-w-4xl">
+    <main className="w-full flex-1 px-4 py-10 bg-grid-pattern">
+      <header className="mx-auto mb-10 w-full max-w-4xl border-4 border-black bg-neo-secondary p-6 shadow-neo-md rotate-[-0.5deg]">
         <Link
           href="/"
-          className="text-sm text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
+          className="inline-flex items-center gap-1 text-xs font-bold border-2 border-black bg-white px-2.5 py-1 text-black shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer"
         >
           ← 프로젝트 목록
         </Link>
-        <h1 className="mt-3 text-2xl font-bold">{project.name}</h1>
+        <h1 className="mt-4 text-3xl font-black tracking-tight uppercase text-black">{project.name}</h1>
         {project.description && (
-          <p className="mt-1 text-sm text-zinc-500">{project.description}</p>
+          <p className="mt-2 text-sm font-bold text-black/80">{project.description}</p>
         )}
       </header>
 
@@ -176,24 +176,22 @@ export default async function ProjectHomePage({
       >
         <div className="flex flex-col gap-4">
           {hasKey ? (
-            <div className="flex flex-col gap-2 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
-              <p>
-                ✅ API 키가 등록되어 있습니다(
-                {withKey.map((p) => p.name).join(", ")}) — 아래 기본 AI 모델을
-                확인하고 페이즈 1로 진행하세요.
+            <div className="flex flex-col gap-3 border-4 border-black bg-[#E8F5E9] p-5 shadow-neo-sm text-black">
+              <p className="font-bold text-sm">
+                ✅ API 키가 등록되어 있습니다 ({withKey.map((p) => p.name).join(", ")}) — 아래 기본 AI 모델을 확인하고 페이즈 1로 진행하세요.
               </p>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 {withKey.map((p) => (
                   <span
                     key={p.id}
-                    className="rounded border border-emerald-300 px-1.5 py-0.5 dark:border-emerald-700"
+                    className="border-2 border-black bg-white px-2 py-0.5 font-bold"
                   >
                     {p.name}: {p.keySource === "personal" ? "개인 키" : "기본 키"}
                   </span>
                 ))}
                 <Link
                   href="/account"
-                  className="underline underline-offset-2 hover:text-emerald-900 dark:hover:text-emerald-100"
+                  className="font-bold underline underline-offset-2 hover:text-neo-accent"
                 >
                   키 관리 →
                 </Link>
@@ -201,9 +199,8 @@ export default async function ProjectHomePage({
             </div>
           ) : (
             <div className="flex flex-col gap-3">
-              <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                API 키가 없습니다. 아래에서 개인 키를 등록해야 AI 기능(수합 OCR·평가·생기부)을
-                쓸 수 있습니다.
+              <p className="border-4 border-black bg-[#FFF9C4] p-5 shadow-neo-sm text-black font-bold text-sm">
+                ⚠️ API 키가 없습니다. 아래에서 개인 키를 등록해야 AI 기능 (수합 OCR·평가·생기부)을 쓸 수 있습니다.
               </p>
               <PersonalKeys providers={providers} personalKeys={personalKeys} />
             </div>
@@ -279,16 +276,20 @@ export default async function ProjectHomePage({
       {/* 작업결과표 (전폭 full-bleed, 엑셀 시트형) */}
       <section
         id="worksheet"
-        className="relative left-1/2 mt-4 w-screen -translate-x-1/2 scroll-mt-6 px-3"
+        className="relative left-1/2 mt-12 w-screen -translate-x-1/2 scroll-mt-6 px-4"
       >
-        <h2 className="mb-3 text-lg font-semibold">작업결과표</h2>
-        <WorksheetTable
-          projectId={project.id}
-          projectName={project.name}
-          countMethod={project.count_method}
-          initialRows={worksheetRows}
-          initialLayout={wsLayout.data?.layout ?? null}
-        />
+        <div className="mx-auto max-w-7xl">
+          <h2 className="mb-4 text-2xl font-black uppercase tracking-tight text-black border-b-4 border-black pb-2">
+            작업결과표
+          </h2>
+          <WorksheetTable
+            projectId={project.id}
+            projectName={project.name}
+            countMethod={project.count_method}
+            initialRows={worksheetRows}
+            initialLayout={wsLayout.data?.layout ?? null}
+          />
+        </div>
       </section>
     </main>
   );
@@ -306,10 +307,10 @@ function LinkCard({
   return (
     <Link
       href={href}
-      className="flex flex-col rounded-lg border border-zinc-200 p-4 transition hover:border-zinc-300 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+      className="flex flex-col border-4 border-black bg-white p-5 shadow-neo-sm hover:-translate-y-0.5 hover:shadow-neo-md transition-all duration-200"
     >
-      <span className="font-medium">{title}</span>
-      <span className="mt-1 text-xs text-zinc-500">{desc}</span>
+      <span className="text-md font-black uppercase tracking-wide text-black">{title}</span>
+      <span className="mt-1 text-xs font-bold text-black/70">{desc}</span>
     </Link>
   );
 }

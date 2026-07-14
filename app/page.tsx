@@ -30,32 +30,35 @@ export default async function HomePage() {
   const projects = projectsRes.data ?? [];
 
   return (
-    <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-10">
-      <header className="mb-8 flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">수행평가 프로젝트</h1>
-          <p className="mt-1 text-sm text-zinc-500">
-            {profile?.name ?? profile?.email ?? ""} 님, 환영합니다. 프로젝트는
-            하나의 수행평가 단위입니다.
-          </p>
-        </div>
-        <nav className="flex items-center gap-4 text-sm">
-          <Link
-            href="/account"
-            className="text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
-          >
-            계정 옵션
-          </Link>
-          {profile?.role === "admin" && (
+    <main className="mx-auto w-full max-w-4xl flex-1 px-4 py-10 bg-grid-pattern">
+      <header className="mb-8 border-4 border-black bg-neo-secondary p-6 shadow-neo-md rotate-[-0.5deg]">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl font-black tracking-tight uppercase">
+              수행평가 프로젝트
+            </h1>
+            <p className="mt-1 text-sm font-bold text-black/80">
+              {profile?.name ?? profile?.email ?? ""} 님, 환영합니다. 프로젝트는 하나의 수행평가 단위입니다.
+            </p>
+          </div>
+          <nav className="flex items-center gap-3 text-sm flex-wrap">
             <Link
-              href="/admin"
-              className="text-zinc-600 underline underline-offset-4 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-zinc-100"
+              href="/account"
+              className="border-2 border-black bg-white px-3 py-1.5 font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all"
             >
-              관리자 패널
+              계정 옵션
             </Link>
-          )}
-          <SignOutButton />
-        </nav>
+            {profile?.role === "admin" && (
+              <Link
+                href="/admin"
+                className="border-2 border-black bg-neo-muted px-3 py-1.5 font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all"
+              >
+                관리자 패널
+              </Link>
+            )}
+            <SignOutButton />
+          </nav>
+        </div>
       </header>
 
       <ProjectList projects={projects} />

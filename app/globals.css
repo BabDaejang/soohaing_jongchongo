@@ -1,26 +1,52 @@
 @import "tailwindcss";
 
+@theme {
+  /* Neo-Brutalism Colors */
+  --color-neo-bg: #FFFDF5;
+  --color-neo-fg: #000000;
+  --color-neo-accent: #FF6B6B;
+  --color-neo-secondary: #FFD93D;
+  --color-neo-muted: #C4B5FD;
+
+  /* Hard Shadows */
+  --shadow-neo-sm: 4px 4px 0px 0px #000000;
+  --shadow-neo-md: 8px 8px 0px 0px #000000;
+  --shadow-neo-lg: 12px 12px 0px 0px #000000;
+  --shadow-neo-xl: 16px 16px 0px 0px #000000;
+
+  /* Font Families */
+  --font-sans: var(--font-space-grotesk), "Pretendard Variable", Pretendard, -apple-system, sans-serif;
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #FFFDF5;
+  --foreground: #000000;
 }
 
 body {
-  background: var(--background);
+  background-color: var(--background);
   color: var(--foreground);
-  font-family:
-    "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont,
-    "Apple SD Gothic Neo", "Malgun Gothic", "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
 }
+
+/* Custom Neo-Brutalism Utilities using Tailwind CSS v4 syntax */
+@utility bg-halftone {
+  background-image: radial-gradient(#000000 1.5px, transparent 1.5px);
+  background-size: 20px 20px;
+}
+
+@utility bg-grid-pattern {
+  background-size: 40px 40px;
+  background-image: linear-gradient(to right, rgba(0, 0, 0, 0.1) 1px, transparent 1px),
+                    linear-gradient(to bottom, rgba(0, 0, 0, 0.1) 1px, transparent 1px);
+}
+
+@utility text-stroke-2 {
+  -webkit-text-stroke: 2px #000000;
+  color: transparent;
+}
+
+@utility text-shadow-neo {
+  text-shadow: 4px 4px 0px #000000;
+}
+
