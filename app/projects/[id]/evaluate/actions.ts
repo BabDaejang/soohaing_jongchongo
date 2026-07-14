@@ -25,9 +25,13 @@ import {
   parseFindings,
   parseSourceClaim,
   summarizeVerdict,
+  normalizeBookString,
+  buildBookKey,
+  mergeAuthenticity,
   type Finding,
   type SourceClaim,
 } from "@/lib/factsheet/authenticity";
+import { metaAgrees } from "@/lib/factsheet/strict-review";
 import { createFactsheetFromBook } from "@/app/factsheets/actions";
 import type {
   AuthenticityStatus,
@@ -340,7 +344,7 @@ export async function prepareEvaluation(
 export async function evaluateOne(
   projectId: string,
   submissionId: string,
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; message: string; retryable?: boolean }> {
   const { userId, supabase } = await requireProjectOwner(projectId);
   const admin = createAdminClient();
 
@@ -412,7 +416,11 @@ export async function evaluateOne(
   } catch (e) {
     // 더 이상 버리지 않는다 — 원인을 그대로 돌려 터미널·서킷 브레이커가 표시하게 한다.
     const msg = e instanceof Error ? e.message : "LLM 호출 실패";
-    return { ok: false, message: msg.slice(0, 300) };
+    const isRetryable =
+      e instanceof Error &&
+      ("status" in e) &&
+      (e.status === 429 || e.status === 503 || e.status === 529);
+    return { ok: false, message: msg.slice(0, 300), retryable: isRetryable };
   }
 
   const { scores, total } = parseEvalScores(text, criteria);
@@ -473,6 +481,18 @@ export async function finalizeEvaluation(
   return result;
 }
 
+interface AuthenticityJson {
+  claim?: SourceClaim;
+  isbn13?: string | null;
+  urls?: string[];
+  content_hash?: string;
+  identified_at?: string;
+  findings?: Finding[];
+  factsheet_id?: string | null;
+  model?: string | null;
+  checked_at?: string;
+}
+
 // ── 진실성 검증 — 채점 앞 스테이지(식별→팩트시트 확보/자동 생성→대조→플래그) ──
 // 리팩토링 2 배치 10. 의심이어도 채점은 진행한다(플래그만 — 자동 감점·제외 없음).
 // authenticity_status·authenticity·factsheet_id는 채점처럼 서버(service role)가 채운다.
@@ -483,6 +503,510 @@ const AUTH_ENTRY_MAX = 40; // 증거로 넣는 팩트시트 entry 상한
 const AUTH_ENTRY_TEXT_MAX = 800; // entry 증거 절단
 const AUTH_URL_TEXT_MAX = 6000; // URL 원문 증거 절단
 const AUTH_META_TEXT_MAX = 3500; // 팩트시트 메타 증거 절단
+
+export async function prepareSourceIdentify(
+  projectId: string,
+): Promise<{ targets: EvalTarget[]; skipped: number }> {
+  const { supabase } = await requireProjectOwner(projectId);
+
+  const { data: subs } = await supabase
+    .from("submissions")
+    .select(
+      "id, student_id, source_filename, content_hash, authenticity_status, authenticity",
+    )
+    .eq("project_id", projectId)
+    .eq("include_in_eval", true)
+    .not("student_id", "is", null)
+    .in("match_status", MATCHED_STATUSES);
+  const rows = subs ?? [];
+
+  const { data: students } = await supabase
+    .from("students")
+    .select("id, student_number, name")
+    .eq("project_id", projectId);
+  const studentById = new Map((students ?? []).map((s) => [s.id, s]));
+
+  const targets: EvalTarget[] = [];
+  let skipped = 0;
+  for (const r of rows) {
+    const prev = (r.authenticity ?? null) as AuthenticityJson | null;
+    const upToDate =
+      (r.authenticity_status === "not_applicable" || (prev && prev.claim !== undefined)) &&
+      prev?.content_hash === r.content_hash;
+    if (upToDate) {
+      skipped += 1;
+      continue;
+    }
+    const st = r.student_id ? studentById.get(r.student_id) : undefined;
+    const who = st ? `${st.student_number ?? "?"} ${st.name}`.trim() : "(미상)";
+    const label = r.source_filename ? `${who} · ${r.source_filename}` : who;
+    targets.push({ id: r.id, label });
+  }
+  return { targets, skipped };
+}
+
+export async function identifySourceOne(
+  projectId: string,
+  submissionId: string,
+): Promise<{
+  ok: boolean;
+  message: string;
+  retryable?: boolean;
+  info?: { kind: "book" | "web" | "none"; isbnConfirmed: boolean };
+}> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select(
+      "id, content_text, content_hash, include_in_eval, student_id, match_status, authenticity_status, authenticity",
+    )
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+
+  if (
+    !sub ||
+    !sub.include_in_eval ||
+    !sub.student_id ||
+    !MATCHED_STATUSES.includes(sub.match_status)
+  ) {
+    return { ok: false, message: "식별 대상이 아닌 제출물입니다." };
+  }
+
+  const prev = (sub.authenticity ?? null) as AuthenticityJson | null;
+  const upToDate =
+    (sub.authenticity_status === "not_applicable" || (prev && prev.claim !== undefined)) &&
+    prev?.content_hash === sub.content_hash;
+  if (upToDate) {
+    return { ok: true, message: "이미 식별됨(증분)" };
+  }
+
+  const { data: project } = await supabase
+    .from("projects")
+    .select("model_routing")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (!project) return { ok: false, message: "프로젝트를 찾을 수 없습니다." };
+  const routing: ModelRouting = project.model_routing;
+
+  const content = sub.content_text ?? "";
+  const checkedAt = new Date().toISOString();
+
+  const urls = extractUrls(content);
+  let claim: SourceClaim;
+  try {
+    const res = await callLLM({
+      userId,
+      purpose: "추출",
+      modelRouting: routing,
+      temperature: 0,
+      messages: [{ role: "user", content: buildIdentifyPrompt(content) }],
+    });
+    claim = parseSourceClaim(res.text);
+  } catch (e) {
+    const isRetryable =
+      e instanceof Error &&
+      ("status" in e) &&
+      (e.status === 429 || e.status === 503 || e.status === 529);
+    return {
+      ok: false,
+      message: (e instanceof Error ? e.message : "출처 식별 실패").slice(0, 300),
+      retryable: isRetryable,
+    };
+  }
+
+  if (claim.kind === "none" && urls.length === 0) {
+    const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+    const updatedAuth = mergeAuthenticity(existingAuth, {
+      claim,
+      isbn13: null,
+      urls: [],
+      content_hash: sub.content_hash,
+      identified_at: checkedAt,
+    });
+    const save = await saveAuthenticity(admin, submissionId, projectId, "not_applicable", updatedAuth, null);
+    if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
+    return {
+      ok: true,
+      message: "출처 인용 없음",
+      info: { kind: "none", isbnConfirmed: false },
+    };
+  }
+
+  let isbn13: string | null = null;
+  let matchesAladin = false;
+  if (claim.kind === "book" && claim.title) {
+    if (hasAladinKey()) {
+      try {
+        const query = claim.author ? `${claim.title} ${claim.author}` : claim.title;
+        const candidates = await searchBooks(query);
+        for (const c of candidates) {
+          const expected = { title: claim.title, author: claim.author ?? null };
+          const found = { title: c.title, author: c.author };
+          const cmp = metaAgrees(expected, found);
+          if (cmp.title && cmp.author) {
+            isbn13 = c.isbn13;
+            matchesAladin = true;
+            break;
+          }
+        }
+      } catch (e) {
+        const isRetryable =
+          e instanceof Error &&
+          ("status" in e) &&
+          (e.status === 429 || e.status === 503 || e.status === 529);
+        if (isRetryable) {
+          return {
+            ok: false,
+            message: `알라딘 API 오류: ${e.message}`.slice(0, 300),
+            retryable: true,
+          };
+        }
+      }
+    }
+  }
+
+  const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+  const updatedAuth = mergeAuthenticity(existingAuth, {
+    claim,
+    isbn13,
+    urls,
+    content_hash: sub.content_hash,
+    identified_at: checkedAt,
+  });
+  const save = await saveAuthenticity(admin, submissionId, projectId, "unverified", updatedAuth, null);
+  if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
+
+  let message = "";
+  const infoKind = claim.kind === "book" ? ("book" as const) : ("web" as const);
+  if (claim.kind === "book") {
+    if (matchesAladin && isbn13) {
+      message = `『${claim.title}』 → ISBN 확정`;
+    } else {
+      message = `『${claim.title}』 — 알라딘 미등재(제목 매칭)`;
+    }
+  } else if (urls.length > 0) {
+    message = `URL 인용 ${urls.length}건`;
+  } else {
+    message = "출처 식별 완료";
+  }
+
+  return {
+    ok: true,
+    message,
+    info: { kind: infoKind, isbnConfirmed: matchesAladin && isbn13 !== null },
+  };
+}
+
+export async function prepareFactsheetStage(
+  projectId: string,
+): Promise<{
+  targets: EvalTarget[];
+  prelude: { level: "info" | "system"; text: string }[];
+}> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  if (!hasAladinKey()) {
+    return {
+      targets: [],
+      prelude: [
+        {
+          level: "system",
+          text: "알라딘 API 키가 등록되지 않아 팩트시트 자동 준비 단계가 활성화되지 않았습니다.",
+        },
+      ],
+    };
+  }
+
+  const { data: subs } = await supabase
+    .from("submissions")
+    .select("authenticity")
+    .eq("project_id", projectId)
+    .eq("include_in_eval", true)
+    .not("student_id", "is", null)
+    .in("match_status", MATCHED_STATUSES);
+
+  const bookClaims = new Map<string, { title: string; author: string | null; isbn13: string | null }>();
+
+  for (const s of subs ?? []) {
+    const auth = s.authenticity as AuthenticityJson | null;
+    if (auth && auth.claim && auth.claim.kind === "book" && auth.claim.title) {
+      const title = auth.claim.title;
+      const author = auth.claim.author ?? null;
+      const isbn13 = auth.isbn13 ?? null;
+
+      const bookKey = buildBookKey(title, author, isbn13);
+
+      if (!bookClaims.has(bookKey)) {
+        bookClaims.set(bookKey, { title, author, isbn13 });
+      }
+    }
+  }
+
+  const { data: factsheets } = await supabase
+    .from("factsheets")
+    .select("isbn13, title, author")
+    .or(`owner_id.eq.${userId},share_status.eq.shared`);
+
+  const securedKeys = new Set<string>();
+  for (const fs of factsheets ?? []) {
+    if (fs.isbn13) {
+      securedKeys.add(`isbn:${fs.isbn13}`);
+    }
+    const fallbackKey = `title:${normalizeBookString(fs.title)}|${normalizeBookString(fs.author ?? "")}`;
+    securedKeys.add(fallbackKey);
+  }
+
+  const targets: EvalTarget[] = [];
+  let securedCount = 0;
+
+  for (const [bookKey, info] of bookClaims.entries()) {
+    let isSecured = false;
+    if (info.isbn13 && securedKeys.has(`isbn:${info.isbn13}`)) {
+      isSecured = true;
+    }
+    const titleAuthorKey = `title:${normalizeBookString(info.title)}|${normalizeBookString(info.author ?? "")}`;
+    if (securedKeys.has(titleAuthorKey)) {
+      isSecured = true;
+    }
+
+    if (isSecured) {
+      securedCount += 1;
+    } else {
+      const label = info.author ? `『${info.title}』 (${info.author})` : `『${info.title}』`;
+      targets.push({ id: bookKey, label });
+    }
+  }
+
+  return {
+    targets,
+    prelude: [
+      {
+        level: "info",
+        text: `준비 대상 책 ${targets.length}권 · 기확보 ${securedCount}권 재사용`,
+      },
+    ],
+  };
+}
+
+export async function prepareFactsheetOne(
+  projectId: string,
+  bookKey: string,
+): Promise<{
+  ok: boolean;
+  message: string;
+  retryable?: boolean;
+  info?: { status: "reuse" | "create" | "fail" };
+}> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  let isbn13: string | null = null;
+  let title = "";
+  let author: string | null = null;
+
+  if (bookKey.startsWith("isbn:")) {
+    isbn13 = bookKey.slice(5);
+  } else if (bookKey.startsWith("title:")) {
+    const parts = bookKey.slice(6).split("|");
+    title = parts[0];
+    author = parts[1] || null;
+  }
+
+  let foundId: string | null = null;
+  let isMine = false;
+  let factsheetTitle = "";
+  let factsheetAuthor: string | null = null;
+
+  if (isbn13) {
+    const { data: mine } = await supabase
+      .from("factsheets")
+      .select("id, title, author, owner_id")
+      .eq("owner_id", userId)
+      .eq("isbn13", isbn13)
+      .maybeSingle();
+    if (mine) {
+      foundId = mine.id;
+      isMine = true;
+      factsheetTitle = mine.title;
+      factsheetAuthor = mine.author;
+    } else {
+      const { data: shared } = await supabase
+        .from("factsheets")
+        .select("id, title, author, owner_id")
+        .eq("share_status", "shared")
+        .eq("isbn13", isbn13)
+        .maybeSingle();
+      if (shared) {
+        foundId = shared.id;
+        isMine = shared.owner_id === userId;
+        factsheetTitle = shared.title;
+        factsheetAuthor = shared.author;
+      }
+    }
+  }
+
+  if (!foundId) {
+    const { data: allFs } = await supabase
+      .from("factsheets")
+      .select("id, title, author, owner_id, share_status, isbn13")
+      .or(`owner_id.eq.${userId},share_status.eq.shared`);
+
+    const expectedTitle = isbn13 ? "" : normalizeBookString(title);
+    const expectedAuthor = isbn13 ? "" : normalizeBookString(author ?? "");
+
+    const mineHit = allFs?.find((c) => {
+      if (c.owner_id !== userId) return false;
+      if (isbn13 && c.isbn13 === isbn13) return true;
+      return (
+        !isbn13 &&
+        normalizeBookString(c.title) === expectedTitle &&
+        normalizeBookString(c.author ?? "") === expectedAuthor
+      );
+    });
+
+    if (mineHit) {
+      foundId = mineHit.id;
+      isMine = true;
+      factsheetTitle = mineHit.title;
+      factsheetAuthor = mineHit.author;
+    } else {
+      const sharedHit = allFs?.find((c) => {
+        if (c.share_status !== "shared") return false;
+        if (isbn13 && c.isbn13 === isbn13) return true;
+        return (
+          !isbn13 &&
+          normalizeBookString(c.title) === expectedTitle &&
+          normalizeBookString(c.author ?? "") === expectedAuthor
+        );
+      });
+      if (sharedHit) {
+        foundId = sharedHit.id;
+        isMine = sharedHit.owner_id === userId;
+        factsheetTitle = sharedHit.title;
+        factsheetAuthor = sharedHit.author;
+      }
+    }
+  }
+
+  let created = false;
+  if (!foundId) {
+    if (!isbn13 && title) {
+      try {
+        const query = author ? `${title} ${author}` : title;
+        const candidates = await searchBooks(query);
+        for (const c of candidates) {
+          const cmp = metaAgrees({ title, author }, { title: c.title, author: c.author });
+          if (cmp.title && cmp.author) {
+            isbn13 = c.isbn13;
+            break;
+          }
+        }
+      } catch (e) {
+        const isRetryable =
+          e instanceof Error &&
+          ("status" in e) &&
+          (e.status === 429 || e.status === 503 || e.status === 529);
+        return {
+          ok: false,
+          message: `도서 검색 중 오류: ${e instanceof Error ? e.message : "오류"}`.slice(0, 80),
+          retryable: isRetryable,
+          info: { status: "fail" },
+        };
+      }
+    }
+
+    if (!isbn13) {
+      return {
+        ok: false,
+        message: `『${title}』 수집 실패 (ISBN 미조회)`,
+        info: { status: "fail" },
+      };
+    }
+
+    try {
+      const createdRes = await createFactsheetFromBook(isbn13);
+      foundId = createdRes.id;
+      created = true;
+      isMine = true;
+
+      const { data: newFs } = await supabase
+        .from("factsheets")
+        .select("title, author")
+        .eq("id", foundId)
+        .single();
+      factsheetTitle = newFs?.title ?? "도서";
+      factsheetAuthor = newFs?.author ?? null;
+    } catch (e) {
+      const isRetryable =
+        e instanceof Error &&
+        ("status" in e) &&
+        (e.status === 429 || e.status === 503 || e.status === 529);
+      return {
+        ok: false,
+        message: `『${title || isbn13}』 생성 실패: ${e instanceof Error ? e.message : "오류"}`.slice(0, 80),
+        retryable: isRetryable,
+        info: { status: "fail" },
+      };
+    }
+  }
+
+  const { data: project } = await supabase
+    .from("projects")
+    .select("model_routing")
+    .eq("id", projectId)
+    .maybeSingle();
+  if (!project) return { ok: false, message: "프로젝트를 찾을 수 없습니다.", info: { status: "fail" } };
+  const routing: ModelRouting = project.model_routing;
+
+  const { count } = await supabase
+    .from("factsheet_entries")
+    .select("id", { count: "exact", head: true })
+    .eq("factsheet_id", foundId);
+  let entryCount = count ?? 0;
+
+  if (isMine && entryCount < AUTH_ENRICH_THRESHOLD) {
+    let added = 0;
+    try {
+      added = await autoCollectFactsheet(
+        userId,
+        supabase,
+        foundId,
+        { title: factsheetTitle, author: factsheetAuthor },
+        routing.extract,
+      );
+      entryCount += added;
+    } catch (e) {
+      const isRetryable =
+        e instanceof Error &&
+        ("status" in e) &&
+        (e.status === 429 || e.status === 503 || e.status === 529);
+      if (isRetryable) {
+        return {
+          ok: false,
+          message: `보강 중 오류: ${e.message}`,
+          retryable: true,
+          info: { status: "fail" },
+        };
+      }
+    }
+  }
+
+  if (created) {
+    return {
+      ok: true,
+      message: `『${factsheetTitle}』 자동 생성 — entry ${entryCount}건`,
+      info: { status: "create" },
+    };
+  } else {
+    return {
+      ok: true,
+      message: `『${factsheetTitle}』 재사용(entry ${entryCount})`,
+      info: { status: "reuse" },
+    };
+  }
+}
 
 // 검증 대상·라벨과 증분 보존 건수를 조립한다(LLM 없음). 채점 대상 조건과 동일한 제출물 중,
 // 미검증이거나 검증 당시 content_hash가 현재와 다른 것(증분).
@@ -527,76 +1051,6 @@ export async function prepareAuthenticity(
   return { targets, skipped };
 }
 
-// 제목·저자 느슨 매칭(공백 제거·대소문자 무시·부분 포함). LLM claim엔 isbn13이 없어 제목으로 찾는다.
-function normLoose(s: string): string {
-  return s.toLowerCase().replace(/\s+/g, "");
-}
-function pickBookMatch(
-  rows: { id: string; title: string; author: string | null }[],
-  claim: SourceClaim,
-): string | null {
-  const t = normLoose(claim.title ?? "");
-  if (!t) return null;
-  const titleMatches = rows.filter((r) => {
-    const rt = normLoose(r.title);
-    return rt === t || rt.includes(t) || t.includes(rt);
-  });
-  if (titleMatches.length === 0) return null;
-  if (claim.author) {
-    const a = normLoose(claim.author);
-    const withAuthor = titleMatches.find(
-      (r) => r.author && (normLoose(r.author).includes(a) || a.includes(normLoose(r.author))),
-    );
-    if (withAuthor) return withAuthor.id;
-  }
-  return titleMatches[0].id;
-}
-
-// 도서 팩트시트 확보: ① 내 소유 → ② shared(재사용) → ③ 검색·자동 생성(private).
-// shared는 그대로 대조(보강하지 않음 — fork 강제는 과함). 검색 키 없으면 확보 실패.
-async function acquireFactsheet(
-  userId: string,
-  supabase: Client,
-  claim: SourceClaim,
-): Promise<{ factsheetId: string | null; isMine: boolean; note: string }> {
-  // ① 내 소유
-  const { data: mine } = await supabase
-    .from("factsheets")
-    .select("id, title, author")
-    .eq("owner_id", userId);
-  const mineHit = pickBookMatch(mine ?? [], claim);
-  if (mineHit) return { factsheetId: mineHit, isMine: true, note: "" };
-
-  // ② shared 재사용(토큰 0 — 다른 학생이 만든 것을 그대로 대조)
-  const { data: sharedRows } = await supabase
-    .from("factsheets")
-    .select("id, title, author")
-    .eq("share_status", "shared");
-  const sharedHit = pickBookMatch(sharedRows ?? [], claim);
-  if (sharedHit) return { factsheetId: sharedHit, isMine: false, note: "공유 재사용" };
-
-  // ③ 검색 → 최상위 후보 isbn → 자동 생성(내 계정, private)
-  if (!hasAladinKey()) return { factsheetId: null, isMine: false, note: "검색 키 미설정" };
-  let isbn: string | null = null;
-  try {
-    const query = claim.author ? `${claim.title} ${claim.author}` : (claim.title ?? "");
-    const candidates = await searchBooks(query);
-    isbn = candidates.find((c) => c.isbn13)?.isbn13 ?? null;
-  } catch {
-    isbn = null;
-  }
-  if (!isbn) return { factsheetId: null, isMine: false, note: "도서 검색 실패" };
-  try {
-    const created = await createFactsheetFromBook(isbn);
-    return { factsheetId: created.id, isMine: true, note: "자동생성" };
-  } catch (e) {
-    return {
-      factsheetId: null,
-      isMine: false,
-      note: (e instanceof Error ? e.message : "팩트시트 생성 실패").slice(0, 80),
-    };
-  }
-}
 
 // 내 소유 팩트시트를 자동 수집으로 보강한다(무할루시네이션: collectOneSource가 스니펫 대조 통과분만 저장).
 async function autoCollectFactsheet(
@@ -623,6 +1077,11 @@ async function autoCollectFactsheet(
   let added = 0;
   for (const target of targets.slice(0, AUTH_COLLECT_MAX)) {
     const r = await collectOneSource(userId, factsheetId, target, extractTarget);
+    if (!r.ok && r.retryable) {
+      const err = new Error(r.message);
+      Object.defineProperty(err, "status", { value: 429, enumerable: true });
+      throw err;
+    }
     added += r.added;
   }
   return added;
@@ -633,7 +1092,7 @@ async function autoCollectFactsheet(
 export async function verifyAuthenticityOne(
   projectId: string,
   submissionId: string,
-): Promise<{ ok: boolean; message: string; status?: AuthenticityStatus }> {
+): Promise<{ ok: boolean; message: string; status?: AuthenticityStatus; retryable?: boolean }> {
   const { userId, supabase } = await requireProjectOwner(projectId);
   const admin = createAdminClient();
 
@@ -670,66 +1129,79 @@ export async function verifyAuthenticityOne(
   const content = sub.content_text ?? "";
   const checkedAt = new Date().toISOString();
 
-  // 2. 식별: 정규식 URL + LLM SourceClaim
-  const urls = extractUrls(content);
-  let claim: SourceClaim;
-  try {
-    const res = await callLLM({
-      userId,
-      purpose: "추출",
-      modelRouting: routing,
-      temperature: 0,
-      messages: [{ role: "user", content: buildIdentifyPrompt(content) }],
-    });
-    claim = parseSourceClaim(res.text);
-  } catch (e) {
-    return {
-      ok: false,
-      message: (e instanceof Error ? e.message : "출처 식별 실패").slice(0, 300),
-    };
+  const auth = sub.authenticity as AuthenticityJson | null;
+  const claim = auth?.claim as SourceClaim | undefined;
+  const isbn13 = auth?.isbn13 as string | null | undefined;
+  const urls = (auth?.urls as string[]) || [];
+
+  if (!claim) {
+    return { ok: false, message: "출처 식별 데이터를 찾을 수 없습니다." };
   }
 
-  // 출처 인용이 전혀 없으면 not_applicable.
-  if (claim.kind === "none" && urls.length === 0) {
-    const save = await saveAuthenticity(admin, submissionId, projectId, "not_applicable", {
-      claim,
-      urls: [],
-      findings: [],
-      factsheet_id: null,
-      model: null,
-      checked_at: checkedAt,
-      content_hash: sub.content_hash,
-    }, null);
-    if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
-    return { ok: true, message: "출처 인용 없음", status: "not_applicable" };
-  }
-
-  // 3. 도서: 팩트시트 확보(내 소유 → shared → 자동 생성) + 부실하면 보강 1회
+  // 2. 팩트시트 조회 (내 소유 -> shared)
   let factsheetId: string | null = null;
-  let fsNote = "";
   if (claim.kind === "book" && claim.title) {
-    const acq = await acquireFactsheet(userId, supabase, claim);
-    factsheetId = acq.factsheetId;
-    fsNote = acq.note;
-    if (factsheetId && acq.isMine && hasNaverKeys()) {
-      const { count } = await supabase
-        .from("factsheet_entries")
-        .select("id", { count: "exact", head: true })
-        .eq("factsheet_id", factsheetId);
-      if ((count ?? 0) < AUTH_ENRICH_THRESHOLD) {
-        const added = await autoCollectFactsheet(
-          userId,
-          supabase,
-          factsheetId,
-          { title: claim.title, author: claim.author },
-          routing.extract,
+    if (isbn13) {
+      const { data: mine } = await supabase
+        .from("factsheets")
+        .select("id")
+        .eq("owner_id", userId)
+        .eq("isbn13", isbn13)
+        .maybeSingle();
+      if (mine) {
+        factsheetId = mine.id;
+      } else {
+        const { data: shared } = await supabase
+          .from("factsheets")
+          .select("id")
+          .eq("share_status", "shared")
+          .eq("isbn13", isbn13)
+          .maybeSingle();
+        if (shared) {
+          factsheetId = shared.id;
+        }
+      }
+    }
+
+    if (!factsheetId) {
+      const { data: allFs } = await supabase
+        .from("factsheets")
+        .select("id, title, author, owner_id, share_status, isbn13")
+        .or(`owner_id.eq.${userId},share_status.eq.shared`);
+
+      const expectedTitle = isbn13 ? "" : normalizeBookString(claim.title);
+      const expectedAuthor = isbn13 ? "" : normalizeBookString(claim.author ?? "");
+
+      const mineHit = allFs?.find((c) => {
+        if (c.owner_id !== userId) return false;
+        if (isbn13 && c.isbn13 === isbn13) return true;
+        return (
+          !isbn13 &&
+          normalizeBookString(c.title) === expectedTitle &&
+          normalizeBookString(c.author ?? "") === expectedAuthor
         );
-        if (added > 0) fsNote = `${fsNote || "보강"}·entry ${added}`;
+      });
+
+      if (mineHit) {
+        factsheetId = mineHit.id;
+      } else {
+        const sharedHit = allFs?.find((c) => {
+          if (c.share_status !== "shared") return false;
+          if (isbn13 && c.isbn13 === isbn13) return true;
+          return (
+            !isbn13 &&
+            normalizeBookString(c.title) === expectedTitle &&
+            normalizeBookString(c.author ?? "") === expectedAuthor
+          );
+        });
+        if (sharedHit) {
+          factsheetId = sharedHit.id;
+        }
       }
     }
   }
 
-  // 4~5. 증거 조립: 팩트시트 entries + 메타 + 인용 URL 원문
+  // 3. 증거 조립: 팩트시트 entries + 메타 + 인용 URL 원문
   const evidence: { id: string; label: string; text: string }[] = [];
   if (factsheetId) {
     const { data: fs } = await supabase
@@ -767,7 +1239,7 @@ export async function verifyAuthenticityOne(
         evidence.push({ id: url, label: "인용 URL", text: text.slice(0, AUTH_URL_TEXT_MAX) });
       }
     } catch {
-      // 그 URL만 제외(로그는 message에 남지 않음 — 스텝 단위 결과만 노출)
+      // 그 URL만 제외
     }
   }
 
@@ -776,23 +1248,21 @@ export async function verifyAuthenticityOne(
     : urls.length > 0
       ? "URL 인용"
       : "출처";
-  const hint = fsNote ? ` [${fsNote}]` : "";
 
   // 증거가 하나도 없으면 LLM 없이 판정 불가.
   if (evidence.length === 0) {
-    const save = await saveAuthenticity(admin, submissionId, projectId, "unverifiable", {
-      claim,
-      urls,
+    const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+    const updatedAuth = mergeAuthenticity(existingAuth, {
       findings: [],
       factsheet_id: factsheetId,
       model: null,
       checked_at: checkedAt,
-      content_hash: sub.content_hash,
-    }, factsheetId);
+    });
+    const save = await saveAuthenticity(admin, submissionId, projectId, "unverifiable", updatedAuth, factsheetId);
     if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
     return {
       ok: true,
-      message: `${head}${hint} — 판정 불가(근거 확보 실패)`,
+      message: `${head} — 판정 불가(근거 확보 실패)`,
       status: "unverifiable",
     };
   }
@@ -811,9 +1281,14 @@ export async function verifyAuthenticityOne(
     findings = parseFindings(res.text, new Set(evidence.map((e) => e.id)));
     model = res.model;
   } catch (e) {
+    const isRetryable =
+      e instanceof Error &&
+      ("status" in e) &&
+      (e.status === 429 || e.status === 503 || e.status === 529);
     return {
       ok: false,
       message: (e instanceof Error ? e.message : "대조 호출 실패").slice(0, 300),
+      retryable: isRetryable,
     };
   }
 
@@ -821,15 +1296,14 @@ export async function verifyAuthenticityOne(
   const supported = findings.filter((f) => f.verdict === "supported").length;
   const contradicted = findings.filter((f) => f.verdict === "contradicted").length;
 
-  const save = await saveAuthenticity(admin, submissionId, projectId, status, {
-    claim,
-    urls,
+  const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+  const updatedAuth = mergeAuthenticity(existingAuth, {
     findings,
     factsheet_id: factsheetId,
     model,
     checked_at: checkedAt,
-    content_hash: sub.content_hash,
-  }, factsheetId);
+  });
+  const save = await saveAuthenticity(admin, submissionId, projectId, status, updatedAuth, factsheetId);
   if (!save.ok) return { ok: false, message: (save.message ?? "저장 실패").slice(0, 300) };
 
   const verdictMsg =
@@ -838,7 +1312,7 @@ export async function verifyAuthenticityOne(
       : status === "suspect"
         ? `의심(모순 ${contradicted}건)`
         : "판정 불가(근거 부족)";
-  return { ok: true, message: `${head}${hint} — ${verdictMsg}`, status };
+  return { ok: true, message: `${head} — ${verdictMsg}`, status };
 }
 
 // 진실성 상태·근거를 service role로 저장(채점처럼 — 소유자 update 정책 불변, needs_recalc 무관).

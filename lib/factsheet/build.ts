@@ -90,7 +90,7 @@ export async function collectOneSource(
   factsheetId: string,
   target: CollectTarget,
   llmTarget: ModelTarget,
-): Promise<{ ok: boolean; message: string; added: number }> {
+): Promise<{ ok: boolean; message: string; added: number; retryable?: boolean }> {
   const supabase = await createClient();
 
   // 사전 상태 확인: shared는 어떤 경로로도 보강 불가(RLS도 막지만 명확한 메시지를 준다).
@@ -159,10 +159,12 @@ export async function collectOneSource(
     });
     extracted = res.text;
   } catch (e) {
+    const isRetryable = e instanceof Error && ("status" in e) && (e.status === 429 || e.status === 503 || e.status === 529);
     return {
       ok: false,
       message: (e instanceof Error ? e.message : "추출 호출 실패").slice(0, 300),
       added: 0,
+      retryable: isRetryable,
     };
   }
 

@@ -126,7 +126,9 @@ async function fetchAladin(url: URL): Promise<unknown> {
     throw new Error("알라딘 API 호출에 실패했습니다 (네트워크 오류·시간 초과).");
   }
   if (!res.ok) {
-    throw new Error(`알라딘 API 호출 실패 (HTTP ${res.status}).`);
+    const err = new Error(`알라딘 API 호출 실패 (HTTP ${res.status}).`);
+    Object.defineProperty(err, "status", { value: res.status, enumerable: true });
+    throw err;
   }
   // output=js는 JSON을 주지만 content-type이 text/javascript인 경우가 있어 직접 파싱한다.
   const body = await res.text();

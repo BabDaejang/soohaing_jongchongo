@@ -203,3 +203,31 @@ export function summarizeVerdict(
   if (supported / findings.length >= 0.5) return "verified";
   return "unverifiable";
 }
+
+export function normalizeBookString(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, "").trim();
+}
+
+export function buildBookKey(
+  title: string,
+  author: string | null,
+  isbn13: string | null,
+): string {
+  if (isbn13) return `isbn:${isbn13}`;
+  return `title:${normalizeBookString(title)}|${normalizeBookString(author ?? "")}`;
+}
+
+export function mergeAuthenticity(
+  existing: unknown,
+  update: Record<string, unknown>,
+): Record<string, unknown> {
+  const base =
+    typeof existing === "object" && existing !== null && !Array.isArray(existing)
+      ? (existing as Record<string, unknown>)
+      : {};
+  return {
+    ...base,
+    ...update,
+  };
+}
+

@@ -4,6 +4,10 @@ import { useCallback, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
+  prepareSourceIdentify,
+  identifySourceOne,
+  prepareFactsheetStage,
+  prepareFactsheetOne,
   prepareAuthenticity,
   verifyAuthenticityOne,
   prepareEvaluation,
@@ -12,6 +16,7 @@ import {
   recalculate,
   updateGradingScheme,
 } from "@/app/projects/[id]/evaluate/actions";
+import { createClient } from "@/lib/supabase/client";
 import {
   useSequentialRun,
   type SequentialTarget,
@@ -61,7 +66,70 @@ export function Phase2Panel({
   const [scheme, setScheme] = useState<GradingScheme>(gradingScheme);
   const [, startScheme] = useTransition();
 
-  // 스테이지 A(진실성) — 증분 보존 건수 + 판정 집계를 finalize까지 ref로 전달한다.
+  // S1 (식별)
+  const s1SkippedRef = useRef(0);
+  const s1TallyRef = useRef({ book: 0, web: 0, none: 0, isbnConfirm: 0 });
+
+  const s1Prepare = useCallback(async () => {
+    const { targets, skipped } = await prepareSourceIdentify(projectId);
+    s1SkippedRef.current = skipped;
+    s1TallyRef.current = { book: 0, web: 0, none: 0, isbnConfirm: 0 };
+    return {
+      targets,
+      prelude: [
+        {
+          level: "info" as const,
+          text: `식별 대상 ${targets.length}건 · 증분 보존 ${skipped}건`,
+        },
+      ],
+    };
+  }, [projectId]);
+
+  const s1StepOne = useCallback(
+    async (t: SequentialTarget) => {
+      const r = await identifySourceOne(projectId, t.id);
+      if (r.ok && r.info) {
+        s1TallyRef.current[r.info.kind] += 1;
+        if (r.info.isbnConfirmed) s1TallyRef.current.isbnConfirm += 1;
+      }
+      return { ok: r.ok, message: r.message, retryable: r.retryable };
+    },
+    [projectId],
+  );
+
+  const s1Finalize = useCallback(async () => {
+    const t = s1TallyRef.current;
+    return `식별 — 도서 ${t.book}·URL ${t.web}·해당 없음 ${t.none}·ISBN 확정 ${t.isbnConfirm}`;
+  }, []);
+
+  // S2 (팩트시트 준비)
+  const s2TallyRef = useRef({ reuse: 0, create: 0, fail: 0 });
+
+  const s2Prepare = useCallback(async () => {
+    const { targets, prelude } = await prepareFactsheetStage(projectId);
+    s2TallyRef.current = { reuse: 0, create: 0, fail: 0 };
+    return { targets, prelude };
+  }, [projectId]);
+
+  const s2StepOne = useCallback(
+    async (t: SequentialTarget) => {
+      const r = await prepareFactsheetOne(projectId, t.id);
+      if (r.ok && r.info?.status) {
+        s2TallyRef.current[r.info.status] += 1;
+      } else if (!r.ok) {
+        s2TallyRef.current.fail += 1;
+      }
+      return { ok: r.ok, message: r.message, retryable: r.retryable };
+    },
+    [projectId],
+  );
+
+  const s2Finalize = useCallback(async () => {
+    const t = s2TallyRef.current;
+    return `팩트시트 — 재사용 ${t.reuse}·생성 ${t.create}·실패 ${t.fail}`;
+  }, []);
+
+  // S3 (대조)
   const authSkippedRef = useRef(0);
   const authTallyRef = useRef({
     verified: 0,
@@ -94,19 +162,36 @@ export function Phase2Panel({
     async (t: SequentialTarget) => {
       const r = await verifyAuthenticityOne(projectId, t.id);
       const s = r.status;
-      if (r.ok && s && s !== "unverified") authTallyRef.current[s] += 1;
+      if (r.ok && s && s !== "unverified") {
+        authTallyRef.current[s as keyof typeof authTallyRef.current] += 1;
+      }
       emitWorksheetRefresh(); // 1건마다 작업결과표 갱신(제출물 배지 반영)
-      return { ok: r.ok, message: r.message };
+      return { ok: r.ok, message: r.message, retryable: r.retryable };
     },
     [projectId],
   );
 
   const authFinalize = useCallback(async () => {
-    const t = authTallyRef.current;
-    return `진실성 요약 — 확인 ${t.verified}·의심 ${t.suspect}·판정 불가 ${t.unverifiable}·해당 없음 ${t.not_applicable}·증분 보존 ${authSkippedRef.current}`;
-  }, []);
+    const supabase = createClient();
+    const { data: allSubs } = await supabase
+      .from("submissions")
+      .select("authenticity_status")
+      .eq("project_id", projectId)
+      .eq("include_in_eval", true)
+      .not("student_id", "is", null)
+      .in("match_status", ["auto_matched", "confirmed"]);
 
-  // 스테이지 B(채점) — prepare가 산출한 증분 보존 건수와 대표 실패 사유를 finalize까지 전달.
+    const t = { verified: 0, suspect: 0, unverifiable: 0, not_applicable: 0, unverified: 0 };
+    for (const s of allSubs ?? []) {
+      const status = s.authenticity_status;
+      if (status in t) {
+        t[status as keyof typeof t] += 1;
+      }
+    }
+    return `진실성 요약 — 확인 ${t.verified}·의심 ${t.suspect}·판정 불가 ${t.unverifiable}·해당 없음 ${t.not_applicable}·증분 보존 ${authSkippedRef.current}`;
+  }, [projectId]);
+
+  // S4 (채점)
   const skippedRef = useRef(0);
   const sampleFailureRef = useRef<string | null>(null);
 
@@ -130,7 +215,7 @@ export function Phase2Panel({
       const r = await evaluateOne(projectId, t.id);
       if (!r.ok && !sampleFailureRef.current) sampleFailureRef.current = r.message;
       emitWorksheetRefresh(); // 1건마다 작업결과표 갱신(제출물 채점 반영)
-      return r;
+      return { ok: r.ok, message: r.message, retryable: r.retryable };
     },
     [projectId],
   );
@@ -161,18 +246,28 @@ export function Phase2Panel({
     [projectId, router],
   );
 
-  // 진실성(A) 정상 종료 후 채점(B)을 이어 실행한다(배치 6 nextStage 연쇄, 1회).
-  const nextStage = useCallback(
+  // 스테이지 연쇄: S1 -> S2 -> S3 -> S4
+  const nextStage3To4 = useCallback(
     () => ({ prepare: evalPrepare, stepOne: evalStepOne, finalize: evalFinalize }),
     [evalPrepare, evalStepOne, evalFinalize],
   );
 
+  const nextStage2To3 = useCallback(
+    () => ({ prepare: authPrepare, stepOne: authStepOne, finalize: authFinalize, nextStage: nextStage3To4 }),
+    [authPrepare, authStepOne, authFinalize, nextStage3To4],
+  );
+
+  const nextStage1To2 = useCallback(
+    () => ({ prepare: s2Prepare, stepOne: s2StepOne, finalize: s2Finalize, nextStage: nextStage2To3 }),
+    [s2Prepare, s2StepOne, s2Finalize, nextStage2To3],
+  );
+
   const { lines, runState, progress, start, pause, resume, stop } =
     useSequentialRun({
-      prepare: authPrepare,
-      stepOne: authStepOne,
-      finalize: authFinalize,
-      nextStage,
+      prepare: s1Prepare,
+      stepOne: s1StepOne,
+      finalize: s1Finalize,
+      nextStage: nextStage1To2,
     });
 
   const running =

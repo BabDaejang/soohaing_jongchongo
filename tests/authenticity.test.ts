@@ -8,6 +8,9 @@ import {
   buildComparePrompt,
   parseFindings,
   summarizeVerdict,
+  normalizeBookString,
+  buildBookKey,
+  mergeAuthenticity,
   type Finding,
 } from "@/lib/factsheet/authenticity";
 
@@ -179,3 +182,55 @@ test("summarizeVerdict: supported 비율 < 0.5면 unverifiable", () => {
 test("summarizeVerdict: 주장이 없으면 unverifiable", () => {
   assert.equal(summarizeVerdict([]), "unverifiable");
 });
+
+// ── 리팩토링 3 배치 2: 신규 순수 함수 테스트 ──
+
+test("normalizeBookString: 영어 대소문자 및 공백 정규화", () => {
+  assert.equal(normalizeBookString("  Cos Mos  "), "cosmos");
+});
+
+test("normalizeBookString: 한글 공백 정규화 및 trim", () => {
+  assert.equal(normalizeBookString("  코스 모스  "), "코스모스");
+});
+
+test("normalizeBookString: 특수문자 유지 및 연속 공백 제거", () => {
+  assert.equal(normalizeBookString("  science-books  "), "science-books");
+});
+
+test("buildBookKey: isbn13이 있을 때 isbn 키 조립", () => {
+  assert.equal(buildBookKey("코스모스", "칼 세이건", "9788983711892"), "isbn:9788983711892");
+});
+
+test("buildBookKey: isbn13이 없고 저자가 있을 때 title/author 폴백 키 조립", () => {
+  assert.equal(buildBookKey("코스모스", "칼 세이건", null), "title:코스모스|칼세이건");
+});
+
+test("buildBookKey: isbn13이 없고 저자가 없을 때 title/author 폴백 키 조립 (저자 빈값)", () => {
+  assert.equal(buildBookKey("코스모스", null, null), "title:코스모스|");
+});
+
+test("mergeAuthenticity: 기존 findings를 유지하면서 새로운 claim과 메타를 정상 병합한다", () => {
+  const existing = {
+    claim: { kind: "book", title: "old" },
+    findings: [{ claim: "A", verdict: "supported" }]
+  };
+  const update = {
+    claim: { kind: "book", title: "new" },
+    isbn13: "9788983711892",
+    urls: ["https://example.com"],
+    content_hash: "hash123",
+    identified_at: "2026-07-14"
+  };
+  const merged = mergeAuthenticity(existing, update);
+  const findings = merged.findings as unknown[];
+  const claim = merged.claim as { title: string };
+  assert.deepEqual(findings, [{ claim: "A", verdict: "supported" }]);
+  assert.equal(claim.title, "new");
+  assert.equal(merged.isbn13, "9788983711892");
+});
+
+test("mergeAuthenticity: 기존 데이터가 null이거나 비어있을 때 정상 동작", () => {
+  const merged = mergeAuthenticity(null, { claim: "test" });
+  assert.deepEqual(merged, { claim: "test" });
+});
+
