@@ -276,9 +276,9 @@ export default async function ProjectHomePage({
       {/* 작업결과표 (전폭 full-bleed, 엑셀 시트형) */}
       <section
         id="worksheet"
-        className="relative left-1/2 mt-12 w-screen -translate-x-1/2 scroll-mt-6 px-4"
+        className="relative left-1/2 mt-12 w-screen -translate-x-1/2 scroll-mt-6 px-6"
       >
-        <div className="mx-auto w-full max-w-[98vw]">
+        <div className="w-full">
           <h2 className="mb-4 text-2xl font-black uppercase tracking-tight text-black border-b-4 border-black pb-2">
             작업결과표
           </h2>
