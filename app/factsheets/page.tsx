@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { hasAladinKey } from "@/lib/factsheet/aladin";
 import { hasNaverKeys } from "@/lib/factsheet/naver";
 import { BookSearch } from "@/components/factsheets/book-search";
+import { FactsheetsExportButton } from "@/components/factsheets/factsheets-export-button";
 import type { ShareStatus } from "@/lib/supabase/types";
 
 // 도서팩트시트 전용 페이지 (리팩토링 2 배치 8) — 계정 단위(프로젝트 무관).
@@ -85,12 +86,15 @@ export default async function FactsheetsPage() {
             독서 활동 제출물의 진실성 검증에 쓰는 도서별 사실 모음(메타·목차·챕터 내용).
           </p>
         </div>
-        <Link
-          href="/"
-          className="text-sm text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
-        >
-          홈
-        </Link>
+        <div className="flex items-center gap-3">
+          <FactsheetsExportButton />
+          <Link
+            href="/"
+            className="text-sm text-zinc-500 underline underline-offset-4 hover:text-zinc-800 dark:hover:text-zinc-200"
+          >
+            홈
+          </Link>
+        </div>
       </header>
 
       {keysMissing && (

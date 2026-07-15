@@ -22,6 +22,7 @@ import {
   type SequentialTarget,
 } from "@/lib/hooks/use-sequential-run";
 import { RunTerminal } from "@/components/projects/run-terminal";
+import { FactsheetSingleExportButton } from "@/components/factsheets/factsheet-single-export-button";
 import type { RoutableProvider } from "@/lib/llm/available";
 import type {
   Factsheet,
@@ -78,7 +79,12 @@ export function FactsheetDetail({
           공유된 팩트시트는 읽기 전용입니다. 보강하려면 [내 계정으로 복제] 후 편집하세요.
         </p>
       )}
-      <EntriesSection factsheetId={factsheet.id} entries={entries} editable={editable} />
+      <EntriesSection
+        factsheetId={factsheet.id}
+        factsheetTitle={factsheet.title}
+        entries={entries}
+        editable={editable}
+      />
       {editable && (
         <EnrichSection
           factsheetId={factsheet.id}
@@ -505,10 +511,12 @@ function ForkButton({ factsheetId }: { factsheetId: string }) {
 
 function EntriesSection({
   factsheetId,
+  factsheetTitle,
   entries,
   editable,
 }: {
   factsheetId: string;
+  factsheetTitle: string;
   entries: FactsheetEntry[];
   editable: boolean;
 }) {
@@ -516,6 +524,9 @@ function EntriesSection({
     <section className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold">챕터별 내용 ({entries.length})</h2>
+        {entries.length > 0 && (
+          <FactsheetSingleExportButton factsheetTitle={factsheetTitle} entries={entries} />
+        )}
       </div>
       {entries.length === 0 ? (
         <p className="rounded-lg border border-dashed border-zinc-300 px-4 py-3 text-sm text-zinc-500 dark:border-zinc-700">

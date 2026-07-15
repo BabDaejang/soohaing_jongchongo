@@ -484,3 +484,63 @@ export async function finalizeEnrichment(factsheetId: string): Promise<void> {
   revalidatePath(`/factsheets/${factsheetId}`);
   revalidatePath("/factsheets");
 }
+
+// 팩트시트 전체 내보내기용 데이터를 조회하는 서버 액션
+export async function exportAllFactsheetsAction(): Promise<{
+  factsheets: {
+    id: string;
+    isbn13: string | null;
+    title: string;
+    author: string | null;
+    publisher: string | null;
+    pub_year: string | null;
+    share_status: string;
+    created_at: string;
+  }[];
+  entries: {
+    factsheet_id: string;
+    chapter_label: string;
+    content: string;
+    quote: string | null;
+    source_type: string;
+    source_url: string | null;
+    created_at: string;
+  }[];
+}> {
+  const { userId } = await requireApproved();
+  const supabase = await createClient();
+
+  // 내 소유 또는 shared 상태인 팩트시트 목록 조회 (RLS 적용됨)
+  const { data: factsheets, error: fsError } = await supabase
+    .from("factsheets")
+    .select("id, isbn13, title, author, publisher, pub_year, share_status, created_at")
+    .or(`owner_id.eq.${userId},share_status.eq.shared`)
+    .order("created_at", { ascending: false });
+
+  if (fsError) {
+    throw new Error(`팩트시트 조회 실패: ${fsError.message}`);
+  }
+
+  if (!factsheets || factsheets.length === 0) {
+    return { factsheets: [], entries: [] };
+  }
+
+  const ids = factsheets.map((f) => f.id);
+
+  // 조회한 팩트시트에 속한 모든 항목 조회 (RLS 적용됨)
+  const { data: entries, error: entriesError } = await supabase
+    .from("factsheet_entries")
+    .select("factsheet_id, chapter_label, content, quote, source_type, source_url, created_at")
+    .in("factsheet_id", ids)
+    .order("created_at", { ascending: true });
+
+  if (entriesError) {
+    throw new Error(`팩트시트 항목 조회 실패: ${entriesError.message}`);
+  }
+
+  return {
+    factsheets: factsheets as any[],
+    entries: entries as any[],
+  };
+}
+
