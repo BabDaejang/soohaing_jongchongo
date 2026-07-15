@@ -32,14 +32,14 @@ export default async function SubmissionsPage({
     supabase
       .from("submissions")
       .select(
-        "id, student_id, source_filename, source_type, content_text, match_status, match_method, identity_source, match_candidates, pending_content, include_in_eval, include_in_record, storage_path, extraction_approved_at, authenticity_status, authenticity, raw_student_no, raw_student_name, created_at",
+        "id, student_id, source_filename, source_type, content_text, match_status, match_method, identity_source, match_candidates, pending_content, include_in_eval, include_in_record, storage_path, extraction_approved_at, authenticity_status, authenticity, factsheet_id, raw_student_no, raw_student_name, created_at",
       )
       .eq("project_id", id)
       .order("created_at", { ascending: true }),
   ]);
 
   const students = studentsRes.data ?? [];
-  const submissions = (submissionsRes.data ?? []) as Submission[];
+  const submissions = (submissionsRes.data ?? []) as any[];
 
   const queue: QueueItem[] = submissions
     .filter((s) => s.match_status === "pending_confirm" || s.match_status === "update_pending")
@@ -53,6 +53,9 @@ export default async function SubmissionsPage({
       raw_student_no: s.raw_student_no,
       raw_student_name: s.raw_student_name,
       storage_path: s.storage_path,
+      authenticity: s.authenticity,
+      factsheet_id: s.factsheet_id,
+      authenticity_status: s.authenticity_status,
     }));
 
   const matched: SubRow[] = submissions

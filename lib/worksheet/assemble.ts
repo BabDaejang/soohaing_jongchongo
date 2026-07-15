@@ -21,6 +21,9 @@ export type SubmissionRaw = {
   authenticity_status: AuthenticityStatus;
   content_text?: string | null;
   source_type?: string | null;
+  factsheet_id?: string | null;
+  authenticity?: unknown;
+  factsheets?: unknown; // Single join result: { title: string } | null or arrays depending on schema mapping
 };
 export type ScoreRaw = {
   student_id: string;
@@ -48,11 +51,23 @@ export function assembleWorksheetRows(input: {
       title = s.submission_key.split("::")[0];
     }
     
+    let factsheetTitle: string | null = null;
+    if (s.factsheets && typeof s.factsheets === "object" && "title" in s.factsheets) {
+      factsheetTitle = (s.factsheets as { title: string }).title;
+    } else {
+      const auth = s.authenticity as Record<string, any> | null;
+      if (auth?.claim?.title) {
+        factsheetTitle = auth.claim.title;
+      }
+    }
+    
     const entry: WorksheetSubmission = {
       id: s.id,
       title,
       authenticityStatus: s.authenticity_status,
       contentText: s.content_text ?? "",
+      factsheetId: s.factsheet_id ?? null,
+      factsheetTitle,
     };
     const list = subsByStudent.get(s.student_id);
     if (list) list.push(entry);
@@ -67,10 +82,24 @@ export function assembleWorksheetRows(input: {
     const score = scoreByStudent.get(st.id) ?? null;
     const rec = recordByStudent.get(st.id) ?? null;
     const display = score?.display_score ?? null;
+    
+    // 조립: 중복 없이 도서 목록 추출
+    const selectedBooksMap = new Map<string, string>();
+    for (const sub of subs) {
+      if (sub.factsheetId && sub.factsheetTitle) {
+        selectedBooksMap.set(sub.factsheetId, sub.factsheetTitle);
+      }
+    }
+    const selectedBooks = Array.from(selectedBooksMap.entries()).map(([factsheetId, title]) => ({
+      factsheetId,
+      title,
+    }));
+
     return {
       studentId: st.id,
       studentNumber: st.student_number,
       name: st.name,
+      selectedBooks,
       submissionCount: subs.length,
       submissions: subs,
       displayScore: st.score_override ?? display,

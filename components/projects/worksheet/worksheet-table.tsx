@@ -19,6 +19,7 @@ import {
 import { countText } from "@/lib/text-count";
 import { AuthenticityBadge } from "@/components/projects/authenticity-badge";
 import type { CountMethod } from "@/lib/supabase/types";
+import { BookSelectModal } from "@/components/projects/book-select-modal";
 import {
   WORKSHEET_COLUMNS,
   COLUMN_LABELS,
@@ -104,6 +105,11 @@ export function WorksheetTable({
   const [openMenu, setOpenMenu] = useState<WorksheetColumnKey | null>(null);
   const [downloadOpen, setDownloadOpen] = useState<"all" | "selected" | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [activeBookSelect, setActiveBookSelect] = useState<{
+    studentId: string;
+    studentName: string;
+    selectedBooks: { factsheetId: string; title: string }[];
+  } | null>(null);
 
   const layoutRef = useRef<WorksheetLayout>(layout);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -546,6 +552,13 @@ export function WorksheetTable({
                   onToggle={() => toggleRow(row.studentId)}
                   onEditStudent={() => setStudentModal({ mode: "edit", row })}
                   onRowResizeStart={(e) => startRowResize(row.studentId, e)}
+                  onOpenBookSelect={() =>
+                    setActiveBookSelect({
+                      studentId: row.studentId,
+                      studentName: row.name,
+                      selectedBooks: row.selectedBooks,
+                    })
+                  }
                   expandedSubmissionStudentId={expandedSubmissionStudentId}
                   setExpandedSubmissionStudentId={setExpandedSubmissionStudentId}
                   expandedCols={expandedCols}
@@ -575,6 +588,21 @@ export function WorksheetTable({
           projectId={projectId}
           state={studentModal}
           onClose={() => setStudentModal(null)}
+        />
+      )}
+
+      {/* 도서 선택/변경 모달 */}
+      {activeBookSelect !== null && (
+        <BookSelectModal
+          projectId={projectId}
+          studentId={activeBookSelect.studentId}
+          studentName={activeBookSelect.studentName}
+          selectedBooks={activeBookSelect.selectedBooks}
+          onClose={() => setActiveBookSelect(null)}
+          onRefresh={() => {
+            setActiveBookSelect(null);
+            reload();
+          }}
         />
       )}
     </div>
@@ -780,6 +808,7 @@ function WorksheetRowView({
   onToggle,
   onEditStudent,
   onRowResizeStart,
+  onOpenBookSelect,
   expandedSubmissionStudentId,
   setExpandedSubmissionStudentId,
   expandedCols,
@@ -796,6 +825,7 @@ function WorksheetRowView({
   onToggle: () => void;
   onEditStudent: () => void;
   onRowResizeStart: (e: React.PointerEvent) => void;
+  onOpenBookSelect: () => void;
   expandedSubmissionStudentId: string | null;
   setExpandedSubmissionStudentId: (id: string | null) => void;
   expandedCols: {
@@ -843,6 +873,7 @@ function WorksheetRowView({
                 collapsed={collapsed}
                 rowHeight={rowHeight}
                 onEditStudent={onEditStudent}
+                onOpenBookSelect={onOpenBookSelect}
                 expandedSubmissionStudentId={expandedSubmissionStudentId}
                 setExpandedSubmissionStudentId={setExpandedSubmissionStudentId}
                 expandedCols={expandedCols}
@@ -865,6 +896,7 @@ function Cell({
   collapsed,
   rowHeight,
   onEditStudent,
+  onOpenBookSelect,
   expandedSubmissionStudentId,
   setExpandedSubmissionStudentId,
   expandedCols,
@@ -878,6 +910,7 @@ function Cell({
   collapsed: boolean;
   rowHeight: number | undefined;
   onEditStudent: () => void;
+  onOpenBookSelect: () => void;
   expandedSubmissionStudentId: string | null;
   setExpandedSubmissionStudentId: (id: string | null) => void;
   expandedCols: {
@@ -959,6 +992,29 @@ function Cell({
         >
           {row.name}
         </button>
+      );
+    case "selected_book":
+      return (
+        <div className="w-full font-sans">
+          {row.selectedBooks.length === 0 ? (
+            <button
+              type="button"
+              onClick={onOpenBookSelect}
+              className="text-red-500 hover:text-red-700 underline font-medium text-xs text-left"
+            >
+              출처 식별 불가
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenBookSelect}
+              className="text-zinc-700 dark:text-zinc-300 hover:underline font-medium text-xs text-left truncate block w-full"
+              title={row.selectedBooks.map((b) => b.title).join(", ")}
+            >
+              {row.selectedBooks.map((b) => b.title).join(", ")}
+            </button>
+          )}
+        </div>
       );
     case "submission_count":
       const isCurrentlyExpanded = expandedSubmissionStudentId === row.studentId;

@@ -7,6 +7,7 @@ export const WORKSHEET_COLUMNS = [
   "internal_id",
   "student_number",
   "name",
+  "selected_book",
   "submission_count",
   "score",
   "grade",
@@ -20,6 +21,7 @@ export const COLUMN_LABELS: Record<WorksheetColumnKey, string> = {
   internal_id: "ID",
   student_number: "학번",
   name: "이름",
+  selected_book: "선택 도서",
   submission_count: "업로드 된 제출물 갯수",
   score: "반영 점수",
   grade: "등급",
@@ -34,12 +36,15 @@ export type WorksheetSubmission = {
   title: string;
   authenticityStatus: AuthenticityStatus;
   contentText: string;
+  factsheetId: string | null;
+  factsheetTitle: string | null;
 };
 
 export type WorksheetRow = {
   studentId: string; // = students.id (제품 부여 고유 번호). 셀에는 앞 8자 + title 속성으로 전문
   studentNumber: string | null;
   name: string;
+  selectedBooks: { factsheetId: string; title: string }[];
   submissionCount: number;
   submissions: WorksheetSubmission[]; // title = source_filename ?? submission_key ?? id 앞 8자
   displayScore: number | null; // override ?? student_scores.display_score ?? null

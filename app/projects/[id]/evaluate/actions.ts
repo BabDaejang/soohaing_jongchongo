@@ -5,6 +5,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireProjectOwner } from "@/lib/projects";
 import { requireApproved } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { callLLM } from "@/lib/llm";
 import type { ModelRouting, ModelTarget } from "@/lib/llm";
 import { writeAuditLog } from "@/lib/audit";
@@ -1471,4 +1472,289 @@ export async function updateModelRouting(formData: FormData) {
     .eq("id", projectId);
   if (error) throw new Error(error.message);
   revalidatePath(`/projects/${projectId}/settings`);
+}
+
+// ── 수동 도서 연결 / 해제 서버 액션 ─────────────────────────────────────
+export async function getAvailableFactsheets(): Promise<{ id: string; title: string; author: string | null; isbn13: string | null }[]> {
+  const { userId } = await requireApproved();
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("factsheets")
+    .select("id, title, author, isbn13")
+    .or(`owner_id.eq.${userId},share_status.eq.shared`);
+  if (error) throw new Error(error.message);
+  return data ?? [];
+}
+
+export async function linkBookToStudentSubmissions(
+  projectId: string,
+  studentId: string,
+  factsheetId: string,
+): Promise<void> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const { data: factsheet, error: fsErr } = await supabase
+    .from("factsheets")
+    .select("title, author, isbn13")
+    .eq("id", factsheetId)
+    .single();
+  if (fsErr || !factsheet) {
+    throw new Error("도서 정보를 찾을 수 없습니다.");
+  }
+
+  const { data: submissions, error: subErr } = await supabase
+    .from("submissions")
+    .select("id, authenticity")
+    .eq("project_id", projectId)
+    .eq("student_id", studentId);
+  
+  if (subErr || !submissions || submissions.length === 0) {
+    throw new Error("연결할 제출물이 없습니다.");
+  }
+
+  const claim: SourceClaim = {
+    kind: "book",
+    title: factsheet.title,
+    author: factsheet.author,
+    publisher: null,
+    year: null,
+  };
+
+  const nowIso = new Date().toISOString();
+
+  for (const sub of submissions) {
+    const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+    const updatedAuth = mergeAuthenticity(existingAuth, {
+      claim,
+      isbn13: factsheet.isbn13,
+      factsheet_id: factsheetId,
+      identified_at: nowIso,
+    });
+
+    const { error: updErr } = await admin
+      .from("submissions")
+      .update({
+        factsheet_id: factsheetId,
+        authenticity: updatedAuth,
+        authenticity_status: "unverified",
+      })
+      .eq("id", sub.id);
+
+    if (updErr) {
+      throw new Error(`도서 연결 저장 실패: ${updErr.message}`);
+    }
+  }
+
+  await writeAuditLog({
+    actorId: userId,
+    action: "authenticity.link_book",
+    entity: "students",
+    entityId: studentId,
+    detail: { project_id: projectId, factsheet_id: factsheetId, title: factsheet.title },
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function unlinkBookFromStudentSubmissions(
+  projectId: string,
+  studentId: string,
+  factsheetId: string,
+): Promise<void> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const { data: factsheet } = await supabase
+    .from("factsheets")
+    .select("title")
+    .eq("id", factsheetId)
+    .maybeSingle();
+
+  const { data: submissions, error: subErr } = await supabase
+    .from("submissions")
+    .select("id, authenticity")
+    .eq("project_id", projectId)
+    .eq("student_id", studentId)
+    .eq("factsheet_id", factsheetId);
+
+  if (subErr || !submissions || submissions.length === 0) {
+    return;
+  }
+
+  const claim: SourceClaim = {
+    kind: "none",
+    title: null,
+    author: null,
+    publisher: null,
+    year: null,
+  };
+
+  const nowIso = new Date().toISOString();
+
+  for (const sub of submissions) {
+    const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+    const updatedAuth = mergeAuthenticity(existingAuth, {
+      claim,
+      isbn13: null,
+      factsheet_id: null,
+      identified_at: nowIso,
+      findings: [],
+    });
+
+    const { error: updErr } = await admin
+      .from("submissions")
+      .update({
+        factsheet_id: null,
+        authenticity: updatedAuth,
+        authenticity_status: "unverified",
+      })
+      .eq("id", sub.id);
+
+    if (updErr) {
+      throw new Error(`도서 연결 해제 실패: ${updErr.message}`);
+    }
+  }
+
+  await writeAuditLog({
+    actorId: userId,
+    action: "authenticity.unlink_book",
+    entity: "students",
+    entityId: studentId,
+    detail: { project_id: projectId, factsheet_id: factsheetId, title: factsheet?.title ?? "unknown" },
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+}
+
+export async function linkBookToSubmission(
+  projectId: string,
+  submissionId: string,
+  factsheetId: string,
+): Promise<void> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const { data: factsheet, error: fsErr } = await supabase
+    .from("factsheets")
+    .select("title, author, isbn13")
+    .eq("id", factsheetId)
+    .single();
+  if (fsErr || !factsheet) {
+    throw new Error("도서 정보를 찾을 수 없습니다.");
+  }
+
+  const { data: sub, error: subErr } = await supabase
+    .from("submissions")
+    .select("id, authenticity")
+    .eq("project_id", projectId)
+    .eq("id", submissionId)
+    .single();
+  
+  if (subErr || !sub) {
+    throw new Error("제출물을 찾을 수 없습니다.");
+  }
+
+  const claim: SourceClaim = {
+    kind: "book",
+    title: factsheet.title,
+    author: factsheet.author,
+    publisher: null,
+    year: null,
+  };
+
+  const nowIso = new Date().toISOString();
+  const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+  const updatedAuth = mergeAuthenticity(existingAuth, {
+    claim,
+    isbn13: factsheet.isbn13,
+    factsheet_id: factsheetId,
+    identified_at: nowIso,
+  });
+
+  const { error: updErr } = await admin
+    .from("submissions")
+    .update({
+      factsheet_id: factsheetId,
+      authenticity: updatedAuth,
+      authenticity_status: "unverified",
+    })
+    .eq("id", sub.id);
+
+  if (updErr) {
+    throw new Error(`도서 연결 저장 실패: ${updErr.message}`);
+  }
+
+  await writeAuditLog({
+    actorId: userId,
+    action: "authenticity.link_book_single",
+    entity: "submissions",
+    entityId: submissionId,
+    detail: { project_id: projectId, factsheet_id: factsheetId, title: factsheet.title },
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/submissions`);
+}
+
+export async function unlinkBookFromSubmission(
+  projectId: string,
+  submissionId: string,
+  factsheetId: string,
+): Promise<void> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const { data: sub, error: subErr } = await supabase
+    .from("submissions")
+    .select("id, authenticity")
+    .eq("project_id", projectId)
+    .eq("id", submissionId)
+    .single();
+
+  if (subErr || !sub) {
+    throw new Error("제출물을 찾을 수 없습니다.");
+  }
+
+  const claim: SourceClaim = {
+    kind: "none",
+    title: null,
+    author: null,
+    publisher: null,
+    year: null,
+  };
+
+  const nowIso = new Date().toISOString();
+  const existingAuth = (sub.authenticity as Record<string, unknown>) || {};
+  const updatedAuth = mergeAuthenticity(existingAuth, {
+    claim,
+    isbn13: null,
+    factsheet_id: null,
+    identified_at: nowIso,
+    findings: [],
+  });
+
+  const { error: updErr } = await admin
+    .from("submissions")
+    .update({
+      factsheet_id: null,
+      authenticity: updatedAuth,
+      authenticity_status: "unverified",
+    })
+    .eq("id", sub.id);
+
+  if (updErr) {
+    throw new Error(`도서 연결 해제 실패: ${updErr.message}`);
+  }
+
+  await writeAuditLog({
+    actorId: userId,
+    action: "authenticity.unlink_book_single",
+    entity: "submissions",
+    entityId: submissionId,
+    detail: { project_id: projectId, factsheet_id: factsheetId },
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/submissions`);
 }

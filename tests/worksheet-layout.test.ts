@@ -20,6 +20,7 @@ function row(p: Partial<WorksheetRow> & { studentId: string }): WorksheetRow {
     studentId: p.studentId,
     studentNumber: p.studentNumber ?? null,
     name: p.name ?? "",
+    selectedBooks: p.selectedBooks ?? [],
     submissionCount: p.submissionCount ?? 0,
     submissions: p.submissions ?? [],
     displayScore: p.displayScore ?? null,

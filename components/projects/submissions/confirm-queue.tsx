@@ -11,6 +11,7 @@ import {
   getSignedFileUrl,
   type LlmCandidate,
 } from "@/app/projects/[id]/submissions/actions";
+import { BookSelectModal } from "@/components/projects/book-select-modal";
 
 type StudentOpt = { id: string; student_number: string | null; name: string };
 type Candidate = { student_id: string; name: string; student_number: string | null };
@@ -25,6 +26,9 @@ export type QueueItem = {
   raw_student_no: string | null;
   raw_student_name: string | null;
   storage_path?: string | null;
+  authenticity?: unknown;
+  factsheet_id?: string | null;
+  authenticity_status?: string | null;
 };
 
 // 큐에 남는 건 애매한 것뿐이다 (SPEC 5.2). 왜 자동 처리되지 않았는지 알려줘야 교사가 판단할 수 있다.
@@ -94,6 +98,18 @@ function QueueRow({
   const [newNo, setNewNo] = useState(item.raw_student_no ?? "");
   const [hidden, setHidden] = useState(false);
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
+  const [bookModalOpen, setBookModalOpen] = useState(false);
+
+  let factsheetTitle = "출처 식별 불가";
+  let hasBook = false;
+  const auth = item.authenticity as any;
+  if (auth?.claim?.title) {
+    factsheetTitle = auth.claim.title;
+    hasBook = true;
+  }
+  const selectedBooks = item.factsheet_id && hasBook
+    ? [{ factsheetId: item.factsheet_id, title: factsheetTitle }]
+    : [];
 
   useEffect(() => {
     if (item.storage_path && item.storage_path.includes("/temp_")) {
@@ -141,6 +157,27 @@ function QueueRow({
           </span>
         )}
         {item.source_filename && <span className="text-zinc-400">{item.source_filename}</span>}
+      </div>
+
+      <div className="mb-3 flex items-center gap-2 text-xs font-sans">
+        <span className="text-zinc-400">선택 도서:</span>
+        {item.factsheet_id && hasBook ? (
+          <button
+            type="button"
+            onClick={() => setBookModalOpen(true)}
+            className="text-zinc-700 dark:text-zinc-300 hover:underline font-medium"
+          >
+            『{factsheetTitle}』
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setBookModalOpen(true)}
+            className="text-red-500 hover:text-red-700 underline font-medium"
+          >
+            출처 식별 불가
+          </button>
+        )}
       </div>
 
       {item.match_status === "update_pending" ? (
@@ -315,6 +352,20 @@ function QueueRow({
       )}
 
       {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
+
+      {bookModalOpen && (
+        <BookSelectModal
+          projectId={projectId}
+          submissionId={item.id}
+          studentName={item.source_filename ?? item.id.slice(0, 8)}
+          selectedBooks={selectedBooks}
+          onClose={() => setBookModalOpen(false)}
+          onRefresh={() => {
+            setBookModalOpen(false);
+            router.refresh();
+          }}
+        />
+      )}
     </li>
   );
 }

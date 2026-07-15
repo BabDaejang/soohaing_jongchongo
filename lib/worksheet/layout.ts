@@ -27,6 +27,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<WorksheetColumnKey, number> = {
   internal_id: 92,
   student_number: 80,
   name: 104,
+  selected_book: 160,
   submission_count: 116,
   score: 92,
   grade: 72,
@@ -38,6 +39,7 @@ export const DEFAULT_COLUMN_WIDTHS: Record<WorksheetColumnKey, number> = {
 export const FILTERABLE_COLUMNS: WorksheetColumnKey[] = [
   "student_number",
   "name",
+  "selected_book",
   "submission_count",
   "score",
   "grade",
@@ -123,6 +125,8 @@ function cellValue(row: WorksheetRow, key: WorksheetColumnKey): string | number 
       return row.studentNumber;
     case "name":
       return row.name;
+    case "selected_book":
+      return row.selectedBooks.map((b) => b.title).join(", ");
     case "submission_count":
       return row.submissionCount;
     case "score":

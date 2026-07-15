@@ -18,7 +18,7 @@ export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRo
     // student_id NOT NULL만(귀속분 전부, 상태 무관).
     supabase
       .from("submissions")
-      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text, source_type")
+      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text, source_type, factsheet_id, authenticity, factsheets(title)")
       .eq("project_id", projectId)
       .not("student_id", "is", null),
     supabase
@@ -34,7 +34,7 @@ export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRo
 
   return assembleWorksheetRows({
     students: studentsRes.data ?? [],
-    submissions: subsRes.data ?? [],
+    submissions: (subsRes.data as any) ?? [],
     scores: scoresRes.data ?? [],
     records: recordsRes.data ?? [],
   });
