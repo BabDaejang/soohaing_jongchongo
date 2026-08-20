@@ -135,3 +135,147 @@ export function deriveIdentityFromFilename(
     studentName: containsToken(base, student.name) ? student.name : null,
   };
 }
+
+// ── 발견(discovery) — 명단 **없이** 식별값을 찾는 경로 (리팩토링 4 배치 2, P-1) ──
+//
+// 위의 deriveIdentityFromFilename·extractIdentityByLLM은 둘 다 "명단과 대조"가 전제라
+// 명단이 비어 있으면 아무도 발견하지 못한다(닭-달걀). 발견 경로는 명단을 전제하지 않고
+// 후보 식별값만 뽑아 raw_*에 적어 두고, **학생 생성은 교사 승인(createDiscoveredStudents)에
+// 맡긴다.** 여기서 자동으로 학생을 만들지 않는 것이 유령 학생 방지의 핵심이다.
+
+// 파일명에서 이름 후보로 쓰지 않을 상용어. 교사가 검토 화면에서 거르므로 최소만 둔다.
+const FILENAME_STOPWORDS: ReadonlySet<string> = new Set([
+  "수행평가", "수행", "평가", "과제", "제출", "보고서", "발표", "활동", "독서",
+  "기록", "최종", "최종본", "초안", "사본", "복사본", "양식", "서식", "학년",
+  "학기", "이름", "학번", "우수작", "결과", "자료",
+]);
+
+export type FilenameIdentityCandidates = {
+  no: string | null; // 4~6자리 숫자 토큰이 정확히 1개일 때만
+  nameCandidates: string[]; // 한글 2~4자 토큰(상용어 제외), 등장 순서
+};
+
+// 파일명에서 식별값 **후보**를 뽑는다. 명단을 보지 않으므로 확정이 아니라 후보다.
+// 숫자·한글의 "온전한 토큰" 경계는 최대 연속 구간으로 자연히 보장된다
+// (예: 1234567은 7자리 한 덩어리라 4~6자리 후보가 되지 않는다 — containsToken과 같은 규칙).
+export function extractIdentityCandidatesFromFilename(
+  filename: string | null,
+): FilenameIdentityCandidates {
+  if (!filename) return { no: null, nameCandidates: [] };
+  const base = fileBasename(filename);
+  if (!base) return { no: null, nameCandidates: [] };
+
+  const digitRuns = base.match(/\d+/g) ?? [];
+  const numbers = digitRuns.filter((d) => d.length >= 4 && d.length <= 6);
+  // 둘 이상이면 어느 것이 학번인지 결정할 수 없다 → 포기(보수 원칙).
+  const no = numbers.length === 1 ? numbers[0] : null;
+
+  const hangulRuns = base.match(/[가-힣]+/g) ?? [];
+  const nameCandidates: string[] = [];
+  for (const token of hangulRuns) {
+    if (token.length < 2 || token.length > 4) continue;
+    if (FILENAME_STOPWORDS.has(token)) continue;
+    if (!nameCandidates.includes(token)) nameCandidates.push(token);
+  }
+
+  return { no, nameCandidates };
+}
+
+// LLM이 뽑아 온 식별값이 **문서에 실제로 존재하는 토큰인지** 대조한다.
+// 팩트시트의 filterBySnippetMatch와 같은 구조적 할루시네이션 차단 — 원문에 없는 값은 버린다.
+export function verifyIdentityTokens(
+  head: string,
+  extracted: { no: string | null; name: string | null },
+): { no: string | null; name: string | null } {
+  const no = extracted.no?.trim() || null;
+  const name = extracted.name?.trim() || null;
+  return {
+    no: no && containsToken(head, no) ? no : null,
+    name: name && containsToken(head, name) ? name : null,
+  };
+}
+
+// 발견 집계 입력 1행(미귀속 제출물의 raw 식별값).
+export type DiscoveredIdentityRow = {
+  submissionId: string;
+  no: string | null;
+  name: string | null;
+  source: IdentitySource | null;
+};
+
+// 교사 검토 화면의 행 = 명단에 없는 학생 후보 1명.
+export type DiscoveredStudent = {
+  no: string | null;
+  name: string | null; // 대표 이름(최다 등장), 이름이 전혀 없으면 null
+  submissionIds: string[];
+  sources: IdentitySource[];
+  conflict: string[]; // 같은 학번에 서로 다른 이름이 모였을 때만 채운다(2개 이상)
+};
+
+// 미귀속 제출물의 raw 식별값을 학생 후보로 묶는다. 그룹 키는 학번 우선, 없으면 이름.
+// **이미 명단에 있는 학생은 제외한다** — 발견의 목적은 신규 학생 후보를 찾는 것이고,
+// 명단에 있는 이름·학번의 귀속은 매칭·확인 큐가 할 일이다.
+export function aggregateDiscoveredIdentities(
+  rows: DiscoveredIdentityRow[],
+  roster: StudentRef[],
+): DiscoveredStudent[] {
+  const rosterNumbers = new Set(
+    roster.map((s) => s.student_number?.trim()).filter((n): n is string => !!n),
+  );
+  const rosterNames = new Set(
+    roster.map((s) => s.name.trim()).filter((n) => n.length > 0),
+  );
+
+  type Bucket = {
+    no: string | null;
+    names: Map<string, number>; // 이름 → 등장 횟수
+    submissionIds: string[];
+    sources: Set<IdentitySource>;
+  };
+  const buckets = new Map<string, Bucket>();
+
+  for (const row of rows) {
+    const no = row.no?.trim() || null;
+    const name = row.name?.trim() || null;
+    if (!no && !name) continue;
+
+    const key = no ? `no:${no}` : `name:${name}`;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { no, names: new Map(), submissionIds: [], sources: new Set() };
+      buckets.set(key, bucket);
+    }
+    if (name) bucket.names.set(name, (bucket.names.get(name) ?? 0) + 1);
+    if (!bucket.submissionIds.includes(row.submissionId)) {
+      bucket.submissionIds.push(row.submissionId);
+    }
+    if (row.source) bucket.sources.add(row.source);
+  }
+
+  const out: DiscoveredStudent[] = [];
+  for (const bucket of buckets.values()) {
+    // 최다 등장 순, 동수면 가나다순 — 대표 이름을 결정적으로 고른다.
+    const names = [...bucket.names.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "ko"))
+      .map(([n]) => n);
+
+    if (bucket.no && rosterNumbers.has(bucket.no)) continue; // 학번이 명단에 있음
+    if (names.some((n) => rosterNames.has(n))) continue; // 이름이 명단에 있음
+
+    out.push({
+      no: bucket.no,
+      name: names[0] ?? null,
+      submissionIds: bucket.submissionIds,
+      sources: [...bucket.sources],
+      conflict: names.length >= 2 ? names : [],
+    });
+  }
+
+  // 학번 있는 후보 먼저(학번 오름차순), 그다음 이름순 — 검토 화면 정렬을 고정한다.
+  return out.sort((a, b) => {
+    if (a.no && b.no) return a.no.localeCompare(b.no, "ko");
+    if (a.no) return -1;
+    if (b.no) return 1;
+    return (a.name ?? "").localeCompare(b.name ?? "", "ko");
+  });
+}

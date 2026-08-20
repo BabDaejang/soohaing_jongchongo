@@ -20,6 +20,9 @@ import {
   prepareMatching,
   matchOneByLlm,
   finalizeMatching,
+  prepareDiscovery,
+  discoverOne,
+  finalizeDiscovery,
 } from "@/app/projects/[id]/submissions/actions";
 import {
   useSequentialRun,
@@ -29,6 +32,7 @@ import {
 import { RunTerminal } from "@/components/projects/run-terminal";
 import { OcrModelSelect } from "@/components/projects/ingest/ocr-model-select";
 import { ColumnMapper } from "@/components/projects/ingest/column-mapper";
+import { DiscoveryReview } from "@/components/projects/dashboard/discovery-review";
 import { emitWorksheetRefresh } from "@/lib/worksheet/refresh";
 import type { RoutableProvider } from "@/lib/llm/available";
 import type { ModelTarget } from "@/lib/llm";
@@ -79,6 +83,10 @@ export function Phase1Panel({
   const [dragOver, setDragOver] = useState(false);
   const [preparing, setPreparing] = useState(false);
 
+  // 발견 학생 검토 패널 — 실행이 끝날 때마다 다시 읽고, 대기 인원을 배지로 보여 준다.
+  const [reviewToken, setReviewToken] = useState(0);
+  const [discoveredCount, setDiscoveredCount] = useState(0);
+
   // 시트 열 매핑 확정 흐름(순차 모달). resolve로 실행 흐름에 매핑을 돌려준다.
   const [sheetJob, setSheetJob] = useState<{
     job: SheetJob;
@@ -117,8 +125,8 @@ export function Phase1Panel({
       finalizeIngest(projectId, { succeeded: r.succeeded, failed: r.failed }),
     [projectId],
   );
-  // 수합이 정상 종료하면 매칭 스테이지를 이어 실행한다.
-  const nextStage = useCallback(
+  // 매칭 스테이지(체인의 마지막) — 명단과 대조해 귀속한다.
+  const matchingStage = useCallback(
     (): RunPlan => ({
       prepare: async () => {
         const { prelude, llmTargets } = await prepareMatching(projectId);
@@ -137,6 +145,28 @@ export function Phase1Panel({
     [projectId],
   );
 
+  // 수합이 정상 종료하면 발견 → 매칭을 이어 실행한다 (리팩토링 4 배치 2, P-1).
+  // 발견은 명단 없이 식별값만 채우므로, 뒤이은 매칭의 결정적 규칙이 그 값을 소비한다.
+  const nextStage = useCallback(
+    (): RunPlan => ({
+      prepare: async () => {
+        const { prelude, targets } = await prepareDiscovery(projectId);
+        return { targets, prelude };
+      },
+      stepOne: async (t: SequentialTarget) => {
+        const r = await discoverOne(projectId, t.id);
+        emitWorksheetRefresh();
+        return r;
+      },
+      finalize: async () => {
+        await finalizeDiscovery(projectId);
+        return "발견 완료 — 찾은 식별값으로 매칭을 이어서 실행합니다.";
+      },
+      nextStage: matchingStage,
+    }),
+    [projectId, matchingStage],
+  );
+
   const { lines, runState, progress, start, pause, resume, stop } =
     useSequentialRun({ prepare, stepOne, finalize, nextStage });
 
@@ -148,6 +178,7 @@ export function Phase1Panel({
     if (runState === "done" || runState === "aborted") {
       void refreshFiles();
       router.refresh();
+      setReviewToken((t) => t + 1); // 발견 결과를 검토 패널에 반영
     }
   }, [runState, refreshFiles, router]);
 
@@ -380,12 +411,24 @@ export function Phase1Panel({
           </span>
         )}
         <span className="text-xs font-bold text-black/70 flex-1">
-          체크한 파일을 수합한 뒤 자동으로 학생 매칭을 이어서 실행합니다. 진행 중 일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다.
+          체크한 파일을 수합한 뒤 <b>발견(학생 찾기) → 매칭</b>을 자동으로 이어서 실행합니다. 진행 중 일시정지·재개·긴급 중단할 수 있고, 중단해도 처리분은 반영됩니다.
         </span>
       </div>
 
-      {/* ⑥ 확인 대기 배지 + 매칭·확인 링크 */}
-      <div className="flex items-center gap-3 text-sm mt-2 border-t-2 border-black pt-3">
+      {/* ⑥ 발견 학생 검토(상시) */}
+      <DiscoveryReview
+        projectId={projectId}
+        reloadToken={reviewToken}
+        onCountChange={setDiscoveredCount}
+      />
+
+      {/* ⑦ 확인 대기 배지 + 매칭·확인 링크 */}
+      <div className="flex flex-wrap items-center gap-3 text-sm mt-2 border-t-2 border-black pt-3">
+        {discoveredCount > 0 && (
+          <span className="border-2 border-black bg-neo-muted px-3 py-1 text-xs font-black text-black shadow-neo-sm rotate-[-1deg]">
+            명단 검토 대기 {discoveredCount}명
+          </span>
+        )}
         {pendingCount > 0 && (
           <span className="border-2 border-black bg-neo-secondary px-3 py-1 text-xs font-black text-black shadow-neo-sm rotate-[1deg]">
             확인 대기 {pendingCount}건

@@ -396,3 +396,14 @@
 - [x] `tests/nav.test.ts` 6건(비로그인·미승인 2종·승인 user·admin·불변성) + package.json 등록.
 - 검증: `npm test` **224/224**, `tsc --noEmit` 무오류, `next build` 21라우트 성공, 런타임 `/login` 헤더 0건 확인. `eslint`는 HEAD와 동일한 기존 14 problems(신규 0건 — 정리는 배치 7).
 - 다음: 배치 2(수합 발견 스테이지)부터 새 대화에서 진행. `Phase1Panel`·`submissions/actions.ts`·`lib/matching.ts`는 이 배치에서 미변경.
+
+## 리팩토링 4 — 배치 2 (수합 학생 발견 · 로스터 부트스트랩) — 2026-08-20 ✅ 완료
+
+> 상세 진행·인계는 `docs/리팩토링_4_프로그레스.md`, 설계 판단은 `docs/DECISIONS.md`(2026-08-20 리팩토링 4 배치 2). **마이그레이션 없음**(0013 불변) — 기존 `raw_student_no/raw_student_name/identity_source` 재사용.
+
+- [x] 순수 함수 3종(`lib/matching.ts`): `extractIdentityCandidatesFromFilename`(4~6자리 숫자 정확히 1개 + 한글 2~4자 토큰 − 상용어) · `verifyIdentityTokens`(문서 내 토큰 실존 대조 = 환각 차단) · `aggregateDiscoveredIdentities`(학번 우선 그룹핑·이름 충돌 표시·명단 중복 제외). 기존 `classifyMatch`·`deriveIdentityFromFilename`은 **무수정**.
+- [x] 서버 액션 5종(`submissions/actions.ts`): `prepareDiscovery`·`discoverOne`·`finalizeDiscovery`·`listDiscoveredStudents`·`createDiscoveredStudents`. 발견은 raw만 채우고 귀속·학생 생성을 하지 않는다.
+- [x] 실행 체인 3단(수합 → 발견 → 매칭)으로 재구성 + 검토 UI `discovery-review.tsx`(기본 전체 선택·이름 충돌 라디오·승인 피드백·작업결과표 갱신) + "명단 검토 대기 N명" 배지.
+- [x] `tests/discovery.test.ts` **22건** 신규 + package.json 등록.
+- 검증: `npm test` **246/246**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 문제 0건(기존 14 유지), PostgREST 필터 문자열 오프라인 URL 검증.
+- 다음: 배치 3(작업결과표 허브화 — 미귀속 배너·매칭 배지·[학생 이동]). 작업결과표가 아직 `student_id NOT NULL`만 조회한다는 점이 배치 3의 출발점.

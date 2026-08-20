@@ -7,8 +7,13 @@ import { requireProjectOwner } from "@/lib/projects";
 import { callLLM } from "@/lib/llm";
 import type { ModelRouting } from "@/lib/llm";
 import {
+  aggregateDiscoveredIdentities,
   classifyMatch,
   deriveIdentityFromFilename,
+  extractIdentityCandidatesFromFilename,
+  verifyIdentityTokens,
+  type DiscoveredIdentityRow,
+  type DiscoveredStudent,
   type IdentitySource,
   type PendingReason,
   type StudentRef,
@@ -16,7 +21,7 @@ import {
 import { deleteOriginalObject } from "@/lib/originals";
 import { writeAuditLog } from "@/lib/audit";
 import { normalizeText, sha256Hex } from "@/lib/parsing";
-import type { Database, SubmissionSourceType } from "@/lib/supabase/types";
+import type { Database, MatchStatus, SubmissionSourceType } from "@/lib/supabase/types";
 
 type Client = SupabaseClient<Database>;
 
@@ -237,6 +242,300 @@ async function applyClassification(
     auto: false,
     resultText: `확인 큐(${pendingLabel(outcome.reason, outcome.candidates.length)})`,
   };
+}
+
+// ── 발견(discovery) 스테이지 — 명단 부트스트랩 (리팩토링 4 배치 2, P-1) ──────
+//
+// 매칭은 "명단과 대조"라서 명단이 비면 아무도 못 찾는다. 발견은 그 앞에 서서 명단 없이
+// 문서·파일명에서 식별값만 뽑아 raw_*에 적어 둔다. **학생을 만들지 않고 귀속도 하지 않는다**
+// — 발견분이 학생이 되는 유일한 경로는 교사 승인(createDiscoveredStudents)이다.
+
+// 발견 대상 상태: 아직 학생이 정해지지 않은 것 전부.
+// (다인용 PDF 분할의 '모호' 페이지는 pending_confirm + raw NULL로 저장되므로 여기 포함된다.)
+const DISCOVERY_STATUSES: MatchStatus[] = ["unmatched", "pending_confirm"];
+
+// 식별값이 하나도 없는 비스프레드시트 제출물이 대상. 스프레드시트 행은 열 값이 이미 있다.
+export async function prepareDiscovery(projectId: string): Promise<{
+  prelude: { level: "ok" | "info" | "system"; text: string }[];
+  targets: { id: string; label: string }[];
+}> {
+  const { supabase } = await requireProjectOwner(projectId);
+
+  const { data } = await supabase
+    .from("submissions")
+    .select("id, source_filename, submission_key")
+    .eq("project_id", projectId)
+    .in("match_status", DISCOVERY_STATUSES)
+    .is("raw_student_no", null)
+    .is("raw_student_name", null)
+    .not("source_type", "in", "(xlsx,csv)");
+
+  const targets = (data ?? []).map((sub) => ({ id: sub.id, label: labelForSub(sub) }));
+  const prelude: { level: "ok" | "info" | "system"; text: string }[] = [];
+  if (targets.length === 0) {
+    prelude.push({ level: "system", text: "식별값을 찾을 제출물이 없습니다." });
+  } else {
+    prelude.push({
+      level: "info",
+      text: `발견 대상 ${targets.length}건 — 명단 없이 문서·파일명에서 학번·이름을 찾습니다(학생 생성은 교사 승인 후).`,
+    });
+  }
+  return { prelude, targets };
+}
+
+// 명단을 주지 않고 작성자 식별값만 뽑게 하는 프롬프트. 명단이 없으므로 "명단 밖 응답 폐기"
+// 대신 **문서 내 토큰 실존 대조**가 환각 방어선이다(verifyIdentityTokens).
+function buildDiscoveryPrompt(head: string): string {
+  return (
+    "아래는 누가 제출했는지 알 수 없는 학생 제출물의 앞부분이다.\n" +
+    "이 제출물을 **작성한 학생**의 학번과 이름을 문서에서 찾아 그대로 옮겨 적으라.\n" +
+    "- 근거는 작성자 식별 정보(이름란·학번란·머리말·서명)에 한정한다.\n" +
+    "- 본문에 언급된 다른 사람 이름(모둠원·인용된 인물·저자·교사)은 근거가 아니다.\n" +
+    "- 문서에 적혀 있는 문자열을 그대로 옮긴다. 추측·보정·생성하지 않는다.\n" +
+    "- 조금이라도 확실하지 않으면 해당 항목을 null로 둔다.\n" +
+    'JSON 객체만 출력하라: {"student_no": "<학번 또는 null>", "name": "<이름 또는 null>"}\n\n' +
+    `[제출물 앞부분]\n${head}`
+  );
+}
+
+// LLM 응답에서 {student_no, name}만 건져낸다(형식 위반은 전부 null).
+function parseDiscoveryJson(text: string): { no: string | null; name: string | null } {
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return { no: null, name: null };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(match[0]);
+  } catch {
+    return { no: null, name: null };
+  }
+  if (typeof parsed !== "object" || parsed === null) return { no: null, name: null };
+  const rec = parsed as Record<string, unknown>;
+  return {
+    no: typeof rec.student_no === "string" ? rec.student_no : null,
+    name: typeof rec.name === "string" ? rec.name : null,
+  };
+}
+
+// 제출물 1건에서 식별값을 찾아 raw_*에 저장한다(터미널이 반복 호출).
+// student_id·match_status는 **건드리지 않는다** — 귀속은 뒤따르는 매칭 스테이지의 몫이다.
+export async function discoverOne(
+  projectId: string,
+  submissionId: string,
+): Promise<{ ok: boolean; message: string; retryable?: boolean }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select("id, content_text, source_filename, raw_student_no, raw_student_name, match_status")
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (!sub) return { ok: false, message: "제출물을 찾을 수 없습니다." };
+  if (sub.raw_student_no || sub.raw_student_name) {
+    return { ok: true, message: "→ 이미 식별값 있음" };
+  }
+
+  const head = (sub.content_text ?? "").slice(0, 1500);
+
+  // ① LLM 추출 + 토큰 실존 대조. 본문이 없으면 건너뛰고 파일명으로 간다.
+  let verified: { no: string | null; name: string | null } = { no: null, name: null };
+  let llmError: string | null = null;
+  if (head.trim()) {
+    try {
+      const routing = await loadRouting(supabase, projectId);
+      const res = await callLLM({
+        userId,
+        purpose: "매칭",
+        modelRouting: routing,
+        temperature: 0,
+        maxTokens: 200,
+        messages: [{ role: "user", content: buildDiscoveryPrompt(head) }],
+      });
+      verified = verifyIdentityTokens(head, parseDiscoveryJson(res.text));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "LLM 호출 실패";
+      const isRetryable =
+        e instanceof Error &&
+        "status" in e &&
+        (e.status === 429 || e.status === 503 || e.status === 529);
+      // 일시적 오류는 재시도에 맡긴다. 그 외에는 파일명 폴백으로 살려 본다.
+      if (isRetryable) return { ok: false, message: msg.slice(0, 300), retryable: true };
+      llmError = msg.slice(0, 120);
+    }
+  }
+
+  // ② 파일명 폴백 — 후보가 하나로 좁혀질 때만 채택한다.
+  let source: IdentitySource = "llm";
+  if (!verified.no && !verified.name) {
+    const cand = extractIdentityCandidatesFromFilename(sub.source_filename);
+    const name = cand.nameCandidates.length === 1 ? cand.nameCandidates[0] : null;
+    if (cand.no || name) {
+      verified = { no: cand.no, name };
+      source = "filename";
+    }
+  }
+
+  if (!verified.no && !verified.name) {
+    const why = llmError ? ` (LLM 실패: ${llmError})` : "";
+    return { ok: true, message: `→ 식별 실패${why}` };
+  }
+
+  const { error } = await supabase
+    .from("submissions")
+    .update({
+      raw_student_no: verified.no,
+      raw_student_name: verified.name,
+      identity_source: source,
+    })
+    .eq("id", submissionId)
+    .eq("project_id", projectId);
+  if (error) return { ok: false, message: error.message.slice(0, 300) };
+
+  const found = [
+    verified.no ? `학번 ${verified.no}` : null,
+    verified.name ? `이름 ${verified.name}` : null,
+  ]
+    .filter(Boolean)
+    .join("·");
+  const why = llmError ? " · LLM 실패로 폴백" : "";
+  return { ok: true, message: `→ ${found} (${sourceLabel(source)}${why})` };
+}
+
+// 실행 종료 후 1회 — 발견은 귀속을 하지 않으므로 revalidate만.
+export async function finalizeDiscovery(projectId: string): Promise<null> {
+  await requireProjectOwner(projectId);
+  revalidatePath(`/projects/${projectId}`);
+  return null;
+}
+
+// 미귀속 제출물의 raw 식별값을 학생 후보로 집계한다(명단에 있는 학생은 제외).
+export async function listDiscoveredStudents(
+  projectId: string,
+): Promise<DiscoveredStudent[]> {
+  const { supabase } = await requireProjectOwner(projectId);
+
+  const [studentsRes, subsRes] = await Promise.all([
+    supabase.from("students").select("id, student_number, name").eq("project_id", projectId),
+    supabase
+      .from("submissions")
+      .select("id, raw_student_no, raw_student_name, identity_source")
+      .eq("project_id", projectId)
+      .in("match_status", DISCOVERY_STATUSES)
+      .or("raw_student_no.not.is.null,raw_student_name.not.is.null"),
+  ]);
+
+  const rows: DiscoveredIdentityRow[] = (subsRes.data ?? []).map((sub) => ({
+    submissionId: sub.id,
+    no: sub.raw_student_no,
+    name: sub.raw_student_name,
+    source: sub.identity_source,
+  }));
+  return aggregateDiscoveredIdentities(rows, studentsRes.data ?? []);
+}
+
+// 교사가 고른 후보를 명단에 추가하고, 그 식별값의 미귀속 제출물을 결정적으로 귀속한다.
+// **발견분이 학생이 되는 유일한 경로**(자동 생성 확대 금지 — classifyMatch는 불변).
+export async function createDiscoveredStudents(
+  projectId: string,
+  picks: { no: string | null; name: string }[],
+): Promise<{ created: number; attributed: number }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  const { data: before } = await supabase
+    .from("students")
+    .select("id, student_number, name")
+    .eq("project_id", projectId);
+  const roster: StudentRef[] = before ?? [];
+
+  let created = 0;
+  const createdLabels: { no: string | null; name: string }[] = [];
+
+  for (const pick of picks) {
+    const no = pick.no?.trim() || null;
+    const name = pick.name?.trim() || (no ? `학번 ${no}` : "");
+    if (!no && !name) continue;
+
+    // 이미 있는 학번이면 만들지 않는다(중복 방지 — 귀속만 하면 된다).
+    if (no && roster.some((s) => s.student_number === no)) continue;
+
+    const { data: inserted, error } = await supabase
+      .from("students")
+      .insert({ project_id: projectId, student_number: no, name })
+      .select("id, student_number, name")
+      .single();
+    if (error) {
+      // 동시 실행 등으로 이미 생성됐을 수 있음 → 재조회(applyClassification과 같은 관용구).
+      if (error.code === "23505" && no) {
+        const { data: again } = await supabase
+          .from("students")
+          .select("id, student_number, name")
+          .eq("project_id", projectId)
+          .eq("student_number", no)
+          .maybeSingle();
+        if (again) {
+          roster.push(again);
+          continue;
+        }
+      }
+      throw new Error(error.message);
+    }
+    roster.push(inserted);
+    created += 1;
+    createdLabels.push({ no: inserted.student_number, name: inserted.name });
+  }
+
+  // ── 결정적 재귀속 — 학번 완전 일치 또는 이름 유일 일치만. 애매하면 큐에 남긴다.
+  const { data: subs } = await supabase
+    .from("submissions")
+    .select("id, raw_student_no, raw_student_name")
+    .eq("project_id", projectId)
+    .in("match_status", DISCOVERY_STATUSES)
+    .or("raw_student_no.not.is.null,raw_student_name.not.is.null");
+
+  let attributed = 0;
+  for (const sub of subs ?? []) {
+    const no = sub.raw_student_no?.trim() || null;
+    const name = sub.raw_student_name?.trim() || null;
+
+    const byNumber = no ? (roster.find((s) => s.student_number === no) ?? null) : null;
+    const byName = name ? roster.filter((s) => s.name === name) : [];
+
+    let studentId: string | null = null;
+    let method: "auto_number" | "auto_name" | null = null;
+    if (byNumber) {
+      studentId = byNumber.id;
+      method = "auto_number";
+    } else if (byName.length === 1) {
+      studentId = byName[0].id;
+      method = "auto_name";
+    }
+    if (!studentId || !method) continue;
+
+    const { error } = await supabase
+      .from("submissions")
+      .update({
+        student_id: studentId,
+        match_status: "auto_matched",
+        match_method: method,
+        match_candidates: null,
+      })
+      .eq("id", sub.id)
+      .eq("project_id", projectId);
+    if (error) throw new Error(error.message);
+    attributed += 1;
+  }
+
+  await writeAuditLog({
+    actorId: userId,
+    action: "student.bulk_create_from_discovery",
+    entity: "students",
+    entityId: projectId,
+    detail: { project_id: projectId, created, attributed, students: createdLabels },
+  });
+
+  revalidatePath(`/projects/${projectId}`);
+  revalidatePath(`/projects/${projectId}/submissions`);
+  return { created, attributed };
 }
 
 // ── 매칭 실행 — 클라이언트 구동 1건 단위(prepare → matchOneByLlm × N → finalize) ──
