@@ -94,6 +94,7 @@ export function StudentSubmissions({
   // UI States
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
+  const [includeSaved, setIncludeSaved] = useState<Record<string, string>>({});
   const [addingId, setAddingId] = useState<string | null>(null);
   const [addingText, setAddingText] = useState("");
   const [activeFilterCol, setActiveFilterCol] = useState<string | null>(null);
@@ -367,6 +368,30 @@ export function StudentSubmissions({
         setError(e instanceof Error ? e.message : "수정 실패");
       }
     });
+  };
+
+  // 반영 체크박스는 자동 저장이라 결과가 보이지 않는다 — 짧은 "저장됨" 표기를 붙인다
+  // (TeacherMemoBox의 저장 상태 표기 관행, 배치 3 P-2). 액션 자체는 불변.
+  const markIncludeSaved = (subId: string, text: string) => {
+    setIncludeSaved((prev) => ({ ...prev, [subId]: text }));
+    setTimeout(() => {
+      setIncludeSaved((prev) => {
+        if (prev[subId] !== text) return prev;
+        const next = { ...prev };
+        delete next[subId];
+        return next;
+      });
+    }, 1500);
+  };
+
+  const handleToggleInclude = (
+    subId: string,
+    field: "eval" | "record",
+    value: boolean,
+  ) => {
+    void toggleInclude(projectId, subId, field, value)
+      .then(() => markIncludeSaved(subId, "저장됨"))
+      .catch(() => markIncludeSaved(subId, "저장 실패"));
   };
 
   const handleReassign = (subId: string, toStudentId: string) => {
@@ -775,7 +800,7 @@ export function StudentSubmissions({
                             <input
                               type="checkbox"
                               defaultChecked={row.include_in_eval}
-                              onChange={(e) => void toggleInclude(projectId, row.id, "eval", e.target.checked)}
+                              onChange={(e) => handleToggleInclude(row.id, "eval", e.target.checked)}
                               className="h-3.5 w-3.5 border border-zinc-300 rounded"
                             />
                             평가
@@ -784,11 +809,22 @@ export function StudentSubmissions({
                             <input
                               type="checkbox"
                               defaultChecked={row.include_in_record}
-                              onChange={(e) => void toggleInclude(projectId, row.id, "record", e.target.checked)}
+                              onChange={(e) => handleToggleInclude(row.id, "record", e.target.checked)}
                               className="h-3.5 w-3.5 border border-zinc-300 rounded"
                             />
                             생기부
                           </label>
+                          {includeSaved[row.id] && (
+                            <span
+                              className={
+                                includeSaved[row.id] === "저장됨"
+                                  ? "text-green-600"
+                                  : "text-red-500"
+                              }
+                            >
+                              {includeSaved[row.id]}
+                            </span>
+                          )}
                         </div>
 
                         {/* 귀속 이동 드롭다운 */}

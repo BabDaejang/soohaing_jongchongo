@@ -59,6 +59,8 @@ export default async function ProjectHomePage({
     matchedRes,
     evalRes,
     suspectRes,
+    unassignedUnmatchedRes,
+    unassignedPendingRes,
   ] = await Promise.all([
     supabase
       .from("students")
@@ -66,7 +68,7 @@ export default async function ProjectHomePage({
       .eq("project_id", id),
     supabase
       .from("submissions")
-      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text, source_type")
+      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text, source_type, match_method, identity_source")
       .eq("project_id", id)
       .not("student_id", "is", null),
     supabase
@@ -109,6 +111,19 @@ export default async function ProjectHomePage({
       .select("id", { count: "exact", head: true })
       .eq("project_id", id)
       .eq("authenticity_status", "suspect"),
+    // 미귀속(작업결과표에 보이지 않는) 제출물 — 배너용 (배치 3, P-2).
+    supabase
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", id)
+      .is("student_id", null)
+      .eq("match_status", "unmatched"),
+    supabase
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", id)
+      .is("student_id", null)
+      .in("match_status", ["pending_confirm", "update_pending"]),
   ]);
 
   const worksheetRows = assembleWorksheetRows({
@@ -119,6 +134,10 @@ export default async function ProjectHomePage({
   });
 
   const pendingCount = pendingRes.count ?? 0;
+  const unassignedCount = {
+    unmatched: unassignedUnmatchedRes.count ?? 0,
+    pending: unassignedPendingRes.count ?? 0,
+  };
 
   // 페이즈 2 데이터: 루브릭 기준 개수·채점 대상/완료 수·확정 반영 점수(등급 분포용).
   const criteria = (rubricRes.data?.criteria ?? []) as RubricCriterion[];
@@ -288,6 +307,7 @@ export default async function ProjectHomePage({
             countMethod={project.count_method}
             initialRows={worksheetRows}
             initialLayout={wsLayout.data?.layout ?? null}
+            unassignedCount={unassignedCount}
           />
         </div>
       </section>

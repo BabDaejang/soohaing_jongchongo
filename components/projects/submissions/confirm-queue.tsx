@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useTransition, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import {
   acceptPendingContent,
@@ -12,6 +12,7 @@ import {
   type LlmCandidate,
 } from "@/app/projects/[id]/submissions/actions";
 import { BookSelectModal } from "@/components/projects/book-select-modal";
+import { emitWorksheetRefresh } from "@/lib/worksheet/refresh";
 
 type StudentOpt = { id: string; student_number: string | null; name: string };
 type Candidate = { student_id: string; name: string; student_number: string | null };
@@ -97,6 +98,9 @@ function QueueRow({
   const [newName, setNewName] = useState(item.raw_student_name ?? "");
   const [newNo, setNewNo] = useState(item.raw_student_no ?? "");
   const [hidden, setHidden] = useState(false);
+  // 확정 결과를 잠깐 보여 준 뒤 행을 거둔다 — 소리 없이 사라지면 반영됐는지 알 수 없다(배치 3, P-2).
+  const [doneMsg, setDoneMsg] = useState<string | null>(null);
+  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [bookModalOpen, setBookModalOpen] = useState(false);
 
@@ -111,6 +115,10 @@ function QueueRow({
     ? [{ factsheetId: item.factsheet_id, title: factsheetTitle }]
     : [];
 
+  useEffect(() => () => {
+    if (doneTimer.current) clearTimeout(doneTimer.current);
+  }, []);
+
   useEffect(() => {
     if (item.storage_path && item.storage_path.includes("/temp_")) {
       getSignedFileUrl(projectId, item.storage_path)
@@ -121,16 +129,33 @@ function QueueRow({
 
   if (hidden) return null;
 
-  const act = (fn: () => Promise<void>) =>
+  // doneText가 있으면 완료 문구를 1.5초 보여 준 뒤 행을 거두고 갱신한다.
+  const act = (fn: () => Promise<void>, doneText?: string) =>
     start(async () => {
       setError("");
       try {
         await fn();
-        router.refresh();
+        emitWorksheetRefresh(); // 작업결과표도 함께 갱신(P-2)
+        if (!doneText) {
+          router.refresh();
+          return;
+        }
+        setDoneMsg(doneText);
+        doneTimer.current = setTimeout(() => {
+          setHidden(true);
+          router.refresh();
+        }, 1500);
       } catch (e) {
         setError(e instanceof Error ? e.message : "처리 실패");
       }
     });
+
+  // 학생 표기 — 완료 문구용("10203 · 홍길동").
+  const labelOf = (studentId: string): string => {
+    const st = students.find((s) => s.id === studentId);
+    if (!st) return "학생";
+    return `${st.student_number ? `${st.student_number} · ` : ""}${st.name}`;
+  };
 
   const candidates = (Array.isArray(item.match_candidates)
     ? (item.match_candidates as Candidate[])
@@ -200,7 +225,9 @@ function QueueRow({
             <button
               type="button"
               disabled={pending}
-              onClick={() => act(() => acceptPendingContent(projectId, item.id))}
+              onClick={() =>
+                act(() => acceptPendingContent(projectId, item.id), "→ 새 내용이 반영됨 ✓")
+              }
               className={primaryBtn}
             >
               새 내용 반영
@@ -208,7 +235,9 @@ function QueueRow({
             <button
               type="button"
               disabled={pending}
-              onClick={() => act(() => rejectPendingContent(projectId, item.id))}
+              onClick={() =>
+                act(() => rejectPendingContent(projectId, item.id), "→ 기존 내용을 유지함 ✓")
+              }
               className={ghostBtn}
             >
               거부(기존 유지)
@@ -239,7 +268,12 @@ function QueueRow({
                     key={c.student_id}
                     type="button"
                     disabled={pending}
-                    onClick={() => act(() => attributeExisting(projectId, item.id, c.student_id))}
+                    onClick={() =>
+                      act(
+                        () => attributeExisting(projectId, item.id, c.student_id),
+                        `→ ${labelOf(c.student_id)} 학생에게 귀속됨 ✓`,
+                      )
+                    }
                     className={ghostBtn}
                   >
                     {c.name}
@@ -264,7 +298,10 @@ function QueueRow({
                         disabled={pending || !c.student_id}
                         onClick={() =>
                           c.student_id &&
-                          act(() => attributeExisting(projectId, item.id, c.student_id!))
+                          act(
+                            () => attributeExisting(projectId, item.id, c.student_id!),
+                            `→ ${labelOf(c.student_id)} 학생에게 귀속됨 ✓`,
+                          )
                         }
                         className={ghostBtn}
                       >
@@ -296,7 +333,12 @@ function QueueRow({
             <button
               type="button"
               disabled={pending || !selected}
-              onClick={() => act(() => attributeExisting(projectId, item.id, selected))}
+              onClick={() =>
+                act(
+                  () => attributeExisting(projectId, item.id, selected),
+                  `→ ${labelOf(selected)} 학생에게 귀속됨 ✓`,
+                )
+              }
               className={ghostBtn}
             >
               선택 학생으로 확정
@@ -340,7 +382,10 @@ function QueueRow({
                 type="button"
                 disabled={pending || !newName.trim()}
                 onClick={() =>
-                  act(() => attributeNew(projectId, item.id, newName, newNo || null))
+                  act(
+                    () => attributeNew(projectId, item.id, newName, newNo || null),
+                    `→ ${newName.trim()} 학생을 만들고 귀속됨 ✓`,
+                  )
                 }
                 className={primaryBtn}
               >
@@ -351,6 +396,9 @@ function QueueRow({
         </>
       )}
 
+      {doneMsg && (
+        <p className="mt-2 text-sm font-medium text-green-700 dark:text-green-400">{doneMsg}</p>
+      )}
       {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}
 
       {bookModalOpen && (

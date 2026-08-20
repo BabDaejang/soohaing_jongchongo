@@ -407,3 +407,15 @@
 - [x] `tests/discovery.test.ts` **22건** 신규 + package.json 등록.
 - 검증: `npm test` **246/246**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 문제 0건(기존 14 유지), PostgREST 필터 문자열 오프라인 URL 검증.
 - 다음: 배치 3(작업결과표 허브화 — 미귀속 배너·매칭 배지·[학생 이동]). 작업결과표가 아직 `student_id NOT NULL`만 조회한다는 점이 배치 3의 출발점.
+
+## 리팩토링 4 — 배치 3 (작업결과표 허브화 · 매칭 확인·수정 신뢰성) — 2026-08-20 ✅ 완료
+
+> 상세 진행·인계는 `docs/리팩토링_4_프로그레스.md`, 설계 판단은 `docs/DECISIONS.md`(2026-08-20 리팩토링 4 배치 3). **매칭 규칙·스키마 변경 없음**(0013 불변).
+
+- [x] 미귀속 배너 — `lib/worksheet/unassigned.ts`(순수 카운트·요약) + 대시보드 미귀속 2쿼리 + `unassignedCount` prop(공유 계약). `student_id IS NULL` 기준이라 배너 숫자 = 표에서 빠진 행 수.
+- [x] 갱신 정합 — `fetchUnassignedCount` 신설, `WORKSHEET_REFRESH_EVENT` 수신 시 행·카운트 동시 재조회(`fetchWorksheetRows` 반환 형태는 불변).
+- [x] 매칭 배지 + [학생 이동] — `WorksheetSubmission`에 `matchMethod`·`identitySource` 확장(8열 키 계약 불변), 제출물 펼침 헤더에 배지(LLM 유래 앰버 강조)와 학생 select → `reassignSubmission` 재사용 → 즉시 갱신 + 완료 문구.
+- [x] 피드백 정합 — 수정 액션 7종에 대시보드 revalidate 추가, 확인 큐 확정에 "→ ○○ 학생에게 귀속됨 ✓" 1.5초 표시 후 행 제거, 반영 체크박스에 "저장됨" 표기.
+- [x] `tests/worksheet-unassigned.test.ts` 8건 신규 + package.json 등록.
+- 검증: `npm test` **254/254**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 0건(기존 14 유지).
+- 다음: 배치 4(평가 리뷰·수정, 마이그레이션 `0014_evaluations_origin.sql`). 기준별 채점 UI는 제출물 펼침 **셀**에 붙이는 것이 자연스럽다(헤더는 이미 밀도가 높음). 새 서브행 필드는 조회부 **두 곳**(`page.tsx`·`worksheet-actions.ts`)을 모두 고쳐야 한다.

@@ -753,6 +753,9 @@ export async function reassignSubmission(
     entityId: submissionId,
     detail: { from_student_id: sub.student_id, to_student_id: studentId },
   });
+  // 대시보드(작업결과표)도 함께 갱신한다 — 수정 후 돌아갔을 때 구 데이터가 보이면
+  // 반영 여부를 믿을 수 없다(배치 3, P-2).
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -860,6 +863,9 @@ export async function attributeExisting(
   // 임시 분할 페이지 파일 정리
   await cleanupTemporaryPage(supabase, projectId, submissionId);
 
+  // 대시보드(작업결과표)도 함께 갱신한다 — 수정 후 돌아갔을 때 구 데이터가 보이면
+  // 반영 여부를 믿을 수 없다(배치 3, P-2).
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -913,6 +919,9 @@ export async function attributeNew(
   // 임시 분할 페이지 파일 정리
   await cleanupTemporaryPage(supabase, projectId, submissionId);
 
+  // 대시보드(작업결과표)도 함께 갱신한다 — 수정 후 돌아갔을 때 구 데이터가 보이면
+  // 반영 여부를 믿을 수 없다(배치 3, P-2).
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -950,6 +959,9 @@ export async function acceptPendingContent(projectId: string, submissionId: stri
     .eq("id", submissionId)
     .eq("project_id", projectId);
   if (error) throw new Error(error.message);
+  // 대시보드(작업결과표)도 함께 갱신한다 — 수정 후 돌아갔을 때 구 데이터가 보이면
+  // 반영 여부를 믿을 수 없다(배치 3, P-2).
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -962,6 +974,9 @@ export async function rejectPendingContent(projectId: string, submissionId: stri
     .eq("id", submissionId)
     .eq("project_id", projectId);
   if (error) throw new Error(error.message);
+  // 대시보드(작업결과표)도 함께 갱신한다 — 수정 후 돌아갔을 때 구 데이터가 보이면
+  // 반영 여부를 믿을 수 없다(배치 3, P-2).
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -997,6 +1012,9 @@ export async function updateSubmissionText(
     .eq("id", submissionId)
     .eq("project_id", projectId);
   if (error) throw new Error(error.message);
+  // 대시보드(작업결과표)도 함께 갱신한다 — 수정 후 돌아갔을 때 구 데이터가 보이면
+  // 반영 여부를 믿을 수 없다(배치 3, P-2).
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 
@@ -1020,6 +1038,9 @@ export async function deleteSubmission(projectId: string, submissionId: string) 
     .eq("id", submissionId)
     .eq("project_id", projectId);
   if (error) throw new Error(error.message);
+  // 대시보드(작업결과표)도 함께 갱신한다 — 수정 후 돌아갔을 때 구 데이터가 보이면
+  // 반영 여부를 믿을 수 없다(배치 3, P-2).
+  revalidatePath(`/projects/${projectId}`);
   revalidatePath(`/projects/${projectId}/submissions`);
 }
 

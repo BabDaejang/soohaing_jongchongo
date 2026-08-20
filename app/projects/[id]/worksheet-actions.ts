@@ -4,6 +4,7 @@ import { requireProjectOwner } from "@/lib/projects";
 import { normalizeWorksheetLayout } from "@/lib/worksheet/layout";
 import { assembleWorksheetRows } from "@/lib/worksheet/assemble";
 import type { WorksheetRow } from "@/lib/worksheet/types";
+import type { UnassignedCount } from "@/lib/worksheet/unassigned";
 
 // 작업결과표 행 조립(배치 3). requireProjectOwner 후 owner 클라이언트(RLS)로 4쿼리 →
 // 순수 assembleWorksheetRows로 학생 기준 left-join 조립. 페이지도 같은 조립 함수를 쓴다.
@@ -18,7 +19,7 @@ export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRo
     // student_id NOT NULL만(귀속분 전부, 상태 무관).
     supabase
       .from("submissions")
-      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text, source_type, factsheet_id, authenticity, factsheets(title)")
+      .select("id, student_id, source_filename, submission_key, authenticity_status, content_text, source_type, factsheet_id, authenticity, factsheets(title), match_method, identity_source")
       .eq("project_id", projectId)
       .not("student_id", "is", null),
     supabase
@@ -66,4 +67,34 @@ export async function saveWorksheetLayout(
     { onConflict: "user_id,project_id" },
   );
   if (error) throw new Error(`작업결과표 레이아웃 저장 실패: ${error.message}`);
+}
+
+// 미귀속 제출물 카운트 (리팩토링 4 배치 3, P-2).
+// fetchWorksheetRows는 `student_id NOT NULL`만 조립하므로 미귀속분은 표에 없다 — 그 존재를
+// 배너로 알리기 위한 카운트만 따로 센다. **fetchWorksheetRows의 반환 형태(WorksheetRow[])는
+// 건드리지 않는다**(기존 소비자 하위 호환) — 갱신 시 두 액션을 나란히 호출한다.
+export async function fetchUnassignedCount(
+  projectId: string,
+): Promise<UnassignedCount> {
+  const { supabase } = await requireProjectOwner(projectId);
+
+  const [unmatchedRes, pendingRes] = await Promise.all([
+    supabase
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectId)
+      .is("student_id", null)
+      .eq("match_status", "unmatched"),
+    supabase
+      .from("submissions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectId)
+      .is("student_id", null)
+      .in("match_status", ["pending_confirm", "update_pending"]),
+  ]);
+
+  return {
+    unmatched: unmatchedRes.count ?? 0,
+    pending: pendingRes.count ?? 0,
+  };
 }

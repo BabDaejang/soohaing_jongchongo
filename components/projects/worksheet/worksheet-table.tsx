@@ -1,10 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import {
   fetchWorksheetRows,
+  fetchUnassignedCount,
   saveWorksheetLayout,
 } from "@/app/projects/[id]/worksheet-actions";
+import { reassignSubmission } from "@/app/projects/[id]/submissions/actions";
 import {
   setScoreOverride,
   clearScoreOverride,
@@ -18,7 +21,7 @@ import {
 } from "@/app/projects/[id]/students/actions";
 import { countText } from "@/lib/text-count";
 import { AuthenticityBadge } from "@/components/projects/authenticity-badge";
-import type { CountMethod } from "@/lib/supabase/types";
+import type { CountMethod, IdentitySource, MatchMethod } from "@/lib/supabase/types";
 import { BookSelectModal } from "@/components/projects/book-select-modal";
 import {
   WORKSHEET_COLUMNS,
@@ -44,6 +47,12 @@ import {
   emitWorksheetRefresh,
 } from "@/lib/worksheet/refresh";
 import {
+  EMPTY_UNASSIGNED,
+  unassignedSummary,
+  unassignedTotal,
+  type UnassignedCount,
+} from "@/lib/worksheet/unassigned";
+import {
   buildWorksheetAoA,
   formatDownloadStamp,
   sanitizeFilename,
@@ -59,6 +68,24 @@ const SAVE_LABEL: Record<SaveState, string> = {
   saving: "레이아웃 저장 중…",
   saved: "레이아웃 저장됨",
   error: "레이아웃 저장 실패",
+};
+
+// 귀속 경로·식별값 출처 배지 (리팩토링 4 배치 3, P-2).
+// 문구는 서버(applyClassification·sourceLabel)가 실행 터미널에 찍는 말과 같은 어휘를 쓴다.
+const MATCH_METHOD_LABEL: Record<MatchMethod, string> = {
+  auto_number: "학번 자동",
+  auto_name: "이름 자동",
+  auto_new_number: "신규 학번 자동",
+  confirmed_existing: "교사 확정",
+  confirmed_new: "교사 확정(신규)",
+  manual: "수동 추가",
+  reassigned: "교사 이동",
+};
+
+const IDENTITY_SOURCE_LABEL: Record<IdentitySource, string> = {
+  column: "열",
+  filename: "파일명",
+  llm: "LLM 추정",
 };
 
 // 빈 값 셀 클릭 시 이동할 페이즈 앵커. 앵커 요소가 아직 없으면(대시보드 개편 배치 5 전) 무동작.
@@ -82,12 +109,15 @@ export function WorksheetTable({
   countMethod,
   initialRows,
   initialLayout,
+  unassignedCount,
 }: {
   projectId: string;
   projectName: string;
   countMethod: CountMethod;
   initialRows: WorksheetRow[];
   initialLayout: unknown;
+  /** 표에 보이지 않는(학생 미귀속) 제출물 수 — 배너용 (배치 3, P-2). */
+  unassignedCount?: UnassignedCount;
 }) {
   const [rows, setRows] = useState<WorksheetRow[]>(initialRows);
   const [layout, setLayout] = useState<WorksheetLayout>(() =>
@@ -105,6 +135,13 @@ export function WorksheetTable({
   const [openMenu, setOpenMenu] = useState<WorksheetColumnKey | null>(null);
   const [downloadOpen, setDownloadOpen] = useState<"all" | "selected" | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [unassigned, setUnassigned] = useState<UnassignedCount>(
+    unassignedCount ?? EMPTY_UNASSIGNED,
+  );
+  // 제출물 [학생 이동] — 서브행 헤더의 인라인 컨트롤 상태(제출물 id 기준).
+  const [movingSubId, setMovingSubId] = useState<string | null>(null);
+  const [moveFeedback, setMoveFeedback] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const [activeBookSelect, setActiveBookSelect] = useState<{
     studentId: string;
     studentName: string;
@@ -114,6 +151,7 @@ export function WorksheetTable({
   const layoutRef = useRef<WorksheetLayout>(layout);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const moveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 레이아웃 변경 확정 + 디바운스(700ms) 저장.
   const commit = useCallback(
@@ -137,8 +175,13 @@ export function WorksheetTable({
   const reload = useCallback(async () => {
     setRefreshing(true);
     try {
-      const next = await fetchWorksheetRows(projectId);
+      // 행과 미귀속 카운트를 함께 다시 읽는다 — 귀속이 바뀌면 둘 다 움직인다.
+      const [next, counts] = await Promise.all([
+        fetchWorksheetRows(projectId),
+        fetchUnassignedCount(projectId),
+      ]);
       setRows(next);
+      setUnassigned(counts);
     } catch {
       // 조용히 실패(다음 이벤트·수동 새로고침에서 재시도)
     } finally {
@@ -156,6 +199,7 @@ export function WorksheetTable({
     return () => {
       window.removeEventListener(WORKSHEET_REFRESH_EVENT, onRefresh);
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
+      if (moveTimer.current) clearTimeout(moveTimer.current);
     };
   }, [reload]);
 
@@ -183,9 +227,45 @@ export function WorksheetTable({
       title: sub.title,
       studentId: expandedStudent.studentId,
       contentText: sub.contentText,
+      matchMethod: sub.matchMethod,
+      identitySource: sub.identitySource,
       index,
     }));
   }, [expandedStudent]);
+
+  // [학생 이동] 대상 목록 — 이미 조회한 rows에서 조립한다(추가 조회 불필요).
+  const studentOptions = useMemo(
+    () =>
+      rows.map((r) => ({
+        id: r.studentId,
+        label: `${r.studentNumber ? `${r.studentNumber} · ` : ""}${r.name}`,
+      })),
+    [rows],
+  );
+
+  // 제출물을 다른 학생으로 재귀속한다(기존 reassignSubmission 재사용 — 매칭 규칙 불변).
+  async function moveSubmission(subId: string, toStudentId: string) {
+    if (!toStudentId) return;
+    setMovingSubId(subId);
+    setMoveError(null);
+    setMoveFeedback(null);
+    try {
+      await reassignSubmission(projectId, subId, toStudentId);
+      const who = studentOptions.find((o) => o.id === toStudentId)?.label ?? "학생";
+      // 옮긴 제출물은 더 이상 이 학생의 열이 아니라 펼침이 사라진다 —
+      // 완료 문구는 서브행 헤더가 아니라 표 위 상시 영역에 남겨야 보인다.
+      setExpandedSubmissionStudentId(null);
+      setMoveFeedback(`${who} 학생으로 이동됨 ✓`);
+      if (moveTimer.current) clearTimeout(moveTimer.current);
+      moveTimer.current = setTimeout(() => setMoveFeedback(null), 4000);
+      emitWorksheetRefresh();
+      await reload();
+    } catch (e) {
+      setMoveError(errMsg(e));
+    } finally {
+      setMovingSubId(null);
+    }
+  }
 
   const columnsToRender = useMemo(() => {
     const list: string[] = [];
@@ -343,8 +423,33 @@ export function WorksheetTable({
 
   const collapsed = layout.allCollapsed;
 
+  const unassignedSum = unassignedTotal(unassigned);
+
   return (
     <div className="flex flex-col gap-3">
+      {/* 미귀속 배너 — 표에 나타나지 않는 제출물의 존재를 알리고 해소 동선을 준다(배치 3, P-2) */}
+      {unassignedSum > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+          <span className="font-semibold">
+            ⚠ 아직 학생에게 귀속되지 않은 제출물 {unassignedSum}건
+          </span>
+          <span className="text-xs">({unassignedSummary(unassigned)}) — 표에 보이지 않습니다.</span>
+          <button
+            type="button"
+            onClick={() => scrollToAnchor("phase-1")}
+            className="rounded-md border border-amber-400 bg-white px-2.5 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 dark:bg-amber-900 dark:text-amber-100 dark:hover:bg-amber-800"
+          >
+            명단 검토
+          </button>
+          <Link
+            href={`/projects/${projectId}/submissions`}
+            className="rounded-md border border-amber-400 bg-white px-2.5 py-1 text-xs font-medium text-amber-900 hover:bg-amber-100 dark:bg-amber-900 dark:text-amber-100 dark:hover:bg-amber-800"
+          >
+            확인 대기 큐
+          </Link>
+        </div>
+      )}
+
       {/* 툴바 */}
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <div className="inline-flex overflow-hidden rounded-md border border-zinc-300 dark:border-zinc-700">
@@ -428,6 +533,13 @@ export function WorksheetTable({
         <span className="text-xs text-zinc-400">{SAVE_LABEL[saveState]}</span>
       </div>
 
+      {moveFeedback && (
+        <p className="text-xs font-medium text-green-700 dark:text-green-400">
+          {moveFeedback}
+        </p>
+      )}
+      {moveError && <p className="text-xs text-red-500">{moveError}</p>}
+
       {/* 표 */}
       <div className="overflow-x-auto rounded-lg border border-zinc-200 dark:border-zinc-800">
         <table className="w-full table-fixed border-collapse text-sm">
@@ -476,6 +588,47 @@ export function WorksheetTable({
                         >
                           ✕
                         </button>
+                      </div>
+
+                      {/* 귀속 경로 배지 + [학생 이동] (배치 3, P-2) — 잘못된 매칭을 여기서 바로잡는다 */}
+                      <div className="mt-1 flex flex-col gap-1 font-normal">
+                        <div className="flex flex-wrap items-center gap-1">
+                          {ec?.matchMethod && (
+                            <span className="rounded border border-zinc-300 bg-white px-1.5 py-0.5 text-[10px] text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300">
+                              {MATCH_METHOD_LABEL[ec.matchMethod]}
+                            </span>
+                          )}
+                          {ec?.identitySource && (
+                            <span
+                              className={`rounded px-1.5 py-0.5 text-[10px] ${
+                                ec.identitySource === "llm"
+                                  ? "border border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
+                                  : "border border-zinc-300 bg-white text-zinc-600 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
+                              }`}
+                              title="식별값 출처"
+                            >
+                              {IDENTITY_SOURCE_LABEL[ec.identitySource]}
+                            </span>
+                          )}
+                        </div>
+                        <select
+                          value=""
+                          disabled={movingSubId === ec?.subId}
+                          onChange={(e) => {
+                            if (ec) void moveSubmission(ec.subId, e.target.value);
+                          }}
+                          title="이 제출물을 다른 학생으로 이동"
+                          className="w-full rounded border border-zinc-300 bg-white px-1 py-0.5 text-[11px] font-normal text-zinc-700 disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-200"
+                        >
+                          <option value="">
+                            {movingSubId === ec?.subId ? "이동 중…" : "학생 이동…"}
+                          </option>
+                          {studentOptions.map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
                       </div>
 
                       {/* 열 너비 조절 핸들 */}

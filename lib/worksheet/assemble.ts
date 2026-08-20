@@ -2,7 +2,11 @@
 // 액션(fetchWorksheetRows)이 각자 4쿼리를 돌린 뒤 이 함수로 동일하게 조립한다
 // (조립 로직 중복 금지). 기본 정렬: 학번 asc(null 끝) · 이름 asc.
 
-import type { AuthenticityStatus } from "@/lib/supabase/types";
+import type {
+  AuthenticityStatus,
+  IdentitySource,
+  MatchMethod,
+} from "@/lib/supabase/types";
 import type { WorksheetRow, WorksheetSubmission } from "./types";
 
 export type StudentRaw = {
@@ -24,6 +28,9 @@ export type SubmissionRaw = {
   factsheet_id?: string | null;
   authenticity?: unknown;
   factsheets?: unknown; // Single join result: { title: string } | null or arrays depending on schema mapping
+  // 리팩토링 4 배치 3 — 선택 필드라 기존 호출부(미전달)는 null로 떨어진다(하위 호환).
+  match_method?: MatchMethod | null;
+  identity_source?: IdentitySource | null;
 };
 export type ScoreRaw = {
   student_id: string;
@@ -68,6 +75,8 @@ export function assembleWorksheetRows(input: {
       contentText: s.content_text ?? "",
       factsheetId: s.factsheet_id ?? null,
       factsheetTitle,
+      matchMethod: s.match_method ?? null,
+      identitySource: s.identity_source ?? null,
     };
     const list = subsByStudent.get(s.student_id);
     if (list) list.push(entry);
