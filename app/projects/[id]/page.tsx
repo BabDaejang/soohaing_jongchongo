@@ -241,8 +241,8 @@ export default async function ProjectHomePage({
       <PhaseSection
         id="phase-2"
         step={2}
-        title="평가"
-        desc="루브릭 기준으로 채점하고 점수·순위·등급을 파생합니다. 등급은 점수에서 계산됩니다."
+        title="평가 (선택)"
+        desc="루브릭 기준으로 채점하고 점수·순위·등급을 파생합니다. 등급은 점수에서 계산됩니다. 이 단계는 선택입니다 — 평가 없이도 페이즈 3에서 생기부를 생성할 수 있습니다."
       >
         <Phase2Panel
           projectId={project.id}
@@ -264,7 +264,7 @@ export default async function ProjectHomePage({
         id="phase-3"
         step={3}
         title="생기부"
-        desc="학생별로 산출물·관찰 메모에 근거한 생기부를 생성하고 문장을 검증합니다. 학생 한 명씩 격리 생성됩니다."
+        desc="학생별로 산출물·관찰 메모에 근거한 생기부를 생성하고 문장을 검증합니다. 학생 한 명씩 격리 생성됩니다. 평가를 건너뛴 경우 점수·등급 없이 제출물·메모만으로 생성됩니다."
       >
         <Phase3Panel
           projectId={project.id}

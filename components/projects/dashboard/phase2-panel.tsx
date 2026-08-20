@@ -422,7 +422,7 @@ export function Phase2Panel({
             href="/factsheets"
             className="border-2 border-black bg-neo-secondary text-black px-4 py-2 text-sm font-bold shadow-neo-sm hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all cursor-pointer"
           >
-            도서팩트시트 →
+            도서팩트시트 관리(전역) →
           </Link>
         </div>
 

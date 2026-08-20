@@ -84,6 +84,7 @@ export default async function FactsheetsPage() {
           <h1 className="text-2xl font-bold">도서팩트시트</h1>
           <p className="mt-1 text-sm text-zinc-500">
             독서 활동 제출물의 진실성 검증에 쓰는 도서별 사실 모음(메타·목차·챕터 내용).
+            계정 단위로 관리되며 모든 프로젝트에서 함께 쓰입니다.
           </p>
         </div>
         <div className="flex items-center gap-3">

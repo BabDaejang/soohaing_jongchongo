@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Space_Grotesk } from "next/font/google";
 import "./globals.css";
+import { GlobalNav } from "@/components/global-nav";
 
 const spaceGrotesk = Space_Grotesk({
   subsets: ["latin"],
@@ -22,6 +23,8 @@ export default function RootLayout({
   return (
     <html lang="ko" className="h-full antialiased light" style={{ colorScheme: "light" }}>
       <body className={`${spaceGrotesk.variable} min-h-full flex flex-col bg-[#FFFDF5] text-black`}>
+        {/* 승인 사용자에게만 렌더된다 — 비로그인·미승인은 null (리팩토링 4 배치 1). */}
+        <GlobalNav />
         {children}
       </body>
     </html>
