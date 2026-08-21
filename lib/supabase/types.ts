@@ -281,6 +281,7 @@ export type PromptProfile = {
   project_id: string | null; // NULL = 계정 기본 프로필
   guidelines: ProfileItem[]; // 작성 참고사항
   prohibitions: ProfileItem[]; // 금지사항
+  brief_md: string; // 작성 브리프(markdown 자유 서술 — 0015, 리팩토링 4 배치 5)
   version: number; // 저장/예시반영/가져오기/복원 시 +1 (세션 8a 확장)
   created_at: string;
   updated_at: string | null;
@@ -302,6 +303,7 @@ export type PromptProfileVersion = {
   version: number;
   guidelines: ProfileItem[];
   prohibitions: ProfileItem[];
+  brief_md: string; // 브리프 스냅샷(0015)
   source: ProfileVersionSource;
   created_at: string;
 };
@@ -593,10 +595,11 @@ export type Database = {
           project_id?: string | null;
           guidelines?: ProfileItem[];
           prohibitions?: ProfileItem[];
+          brief_md?: string;
           version?: number;
         };
         Update: Partial<
-          Pick<PromptProfile, "guidelines" | "prohibitions" | "version">
+          Pick<PromptProfile, "guidelines" | "prohibitions" | "brief_md" | "version">
         >;
         Relationships: [];
       };
@@ -610,6 +613,7 @@ export type Database = {
           version: number;
           guidelines: ProfileItem[];
           prohibitions: ProfileItem[];
+          brief_md?: string;
           source: ProfileVersionSource;
         };
         Update: never;

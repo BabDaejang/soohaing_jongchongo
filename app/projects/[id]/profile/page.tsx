@@ -9,6 +9,7 @@ import type { ProfileItem } from "@/lib/supabase/types";
 type LayerItems = {
   guidelines: ProfileItem[];
   prohibitions: ProfileItem[];
+  briefMd: string; // 작성 브리프(배치 5)
   version: number;
   updatedAt: string | null;
 };
@@ -16,6 +17,7 @@ type LayerItems = {
 const EMPTY: LayerItems = {
   guidelines: [],
   prohibitions: [],
+  briefMd: "",
   version: 0,
   updatedAt: null,
 };
@@ -46,7 +48,7 @@ export default async function ProfilePage({
   // 본인 소유 프로필만 RLS로 조회된다(owner_id = auth.uid()).
   const { data: profiles } = await supabase
     .from("prompt_profiles")
-    .select("project_id, guidelines, prohibitions, version, updated_at")
+    .select("project_id, guidelines, prohibitions, brief_md, version, updated_at")
     .eq("owner_id", user.id)
     .or(`project_id.is.null,project_id.eq.${id}`);
 
@@ -57,6 +59,7 @@ export default async function ProfilePage({
     ? {
         guidelines: accountRow.guidelines as ProfileItem[],
         prohibitions: accountRow.prohibitions as ProfileItem[],
+        briefMd: accountRow.brief_md ?? "",
         version: accountRow.version,
         updatedAt: accountRow.updated_at,
       }
@@ -65,6 +68,7 @@ export default async function ProfilePage({
     ? {
         guidelines: projectRow.guidelines as ProfileItem[],
         prohibitions: projectRow.prohibitions as ProfileItem[],
+        briefMd: projectRow.brief_md ?? "",
         version: projectRow.version,
         updatedAt: projectRow.updated_at,
       }
@@ -81,8 +85,9 @@ export default async function ProfilePage({
         </Link>
         <h1 className="mt-3 text-2xl font-bold">프롬프트 프로필</h1>
         <p className="mt-1 text-sm text-zinc-500">
-          생기부 생성에 적용할 작성 참고사항과 금지사항을 관리합니다. 계정 기본은 모든
-          프로젝트에 적용되고, 프로젝트 오버라이드가 그 뒤에 우선 적용됩니다.
+          생기부 생성에 적용할 작성 브리프(활동 맥락·강조 포인트)와 참고·금지사항을
+          관리합니다. 계정 기본은 모든 프로젝트에 적용되고, 프로젝트 오버라이드가 그 뒤에
+          우선 적용됩니다 (브리프는 오버라이드가 있으면 그것만 적용).
         </p>
       </header>
 

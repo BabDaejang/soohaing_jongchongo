@@ -13,6 +13,7 @@ import {
   type SequentialTarget,
 } from "@/lib/hooks/use-sequential-run";
 import { RunTerminal } from "@/components/projects/run-terminal";
+import { PromptPreviewButton } from "@/components/projects/prompt-preview";
 import { emitWorksheetRefresh } from "@/lib/worksheet/refresh";
 import { recommendCostEffective, type ModelCandidate } from "@/lib/llm/recommend";
 import type { RoutableProvider } from "@/lib/llm/available";
@@ -147,6 +148,7 @@ export function Phase3Panel({
           >
             모델 변경
           </Link>
+          <PromptPreviewButton projectId={projectId} variant="neo" />
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -186,7 +188,7 @@ export function Phase3Panel({
         <LinkCard
           href={`/projects/${projectId}/profile`}
           title="프롬프트 프로필 →"
-          desc="생기부 작성 참고·금지사항 (계정 기본+오버라이드)"
+          desc="작성 브리프(활동 맥락·강조 포인트) + 참고·금지사항 (계정 기본+오버라이드)"
         />
         <LinkCard
           href={`/projects/${projectId}/records`}

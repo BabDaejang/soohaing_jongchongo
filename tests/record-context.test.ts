@@ -61,7 +61,7 @@ function makeSource(
       return list(studentId);
     },
     async getMergedProfile() {
-      return { guidelines: [], prohibitions: [] };
+      return { guidelines: [], prohibitions: [], brief: "" };
     },
     async getRecordSettings() {
       return { charLimit: 500, countMethod: "chars" };

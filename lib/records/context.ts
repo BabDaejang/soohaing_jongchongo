@@ -57,6 +57,7 @@ export type StudentContext = {
   teacherMemo: string | null; // 해당 학생 레코드 귀속분만 (INV-2 예외 경로)
   guidelines: MergedProfile["guidelines"];
   prohibitions: MergedProfile["prohibitions"];
+  brief: string; // 병합된 작성 브리프 — 서버가 prompt_profiles에서 조회해 주입(INV-2, 배치 5)
   charLimit: number;
   countMethod: CountMethod;
 };
@@ -99,6 +100,7 @@ export async function buildStudentContext(
     teacherMemo: student.teacher_memo,
     guidelines: profile.guidelines,
     prohibitions: profile.prohibitions,
+    brief: profile.brief,
     charLimit: settings?.charLimit ?? 500,
     countMethod: settings?.countMethod ?? "chars",
   };
@@ -134,7 +136,7 @@ export function createSupabaseContextSource(
     async getMergedProfile(projectId) {
       const { data } = await supabase
         .from("prompt_profiles")
-        .select("project_id, guidelines, prohibitions")
+        .select("project_id, guidelines, prohibitions, brief_md")
         .eq("owner_id", ownerId)
         .or(`project_id.is.null,project_id.eq.${projectId}`);
       const rows = data ?? [];

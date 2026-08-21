@@ -11,6 +11,7 @@ import { writeAuditLog } from "@/lib/audit";
 import {
   buildStudentContext,
   createSupabaseContextSource,
+  type StudentContext,
 } from "@/lib/records/context";
 import {
   buildGenerationMessages,
@@ -356,10 +357,10 @@ async function loadLayerItems(
   ownerId: string,
   target: ProfileTarget,
   projectId: string,
-): Promise<{ guidelines: ProfileItem[]; prohibitions: ProfileItem[] }> {
+): Promise<{ guidelines: ProfileItem[]; prohibitions: ProfileItem[]; briefMd: string }> {
   const base = supabase
     .from("prompt_profiles")
-    .select("guidelines, prohibitions")
+    .select("guidelines, prohibitions, brief_md")
     .eq("owner_id", ownerId);
   const { data } =
     target === "account"
@@ -368,6 +369,7 @@ async function loadLayerItems(
   return {
     guidelines: (data?.guidelines ?? []) as ProfileItem[],
     prohibitions: (data?.prohibitions ?? []) as ProfileItem[],
+    briefMd: data?.brief_md ?? "",
   };
 }
 
@@ -379,6 +381,7 @@ async function saveProfileLayer(
   projectId: string,
   guidelines: ProfileItem[],
   prohibitions: ProfileItem[],
+  briefMd: string, // 브리프도 같은 버전 기계를 탄다(배치 5, P-7 — 새 편집 체계 금지)
   source: ProfileVersionSource,
 ): Promise<{ profileId: string; version: number }> {
   const pid = target === "account" ? null : projectId;
@@ -397,7 +400,7 @@ async function saveProfileLayer(
     version = existing.version + 1;
     const { error } = await supabase
       .from("prompt_profiles")
-      .update({ guidelines, prohibitions, version })
+      .update({ guidelines, prohibitions, brief_md: briefMd, version })
       .eq("id", existing.id);
     if (error) throw new Error(error.message);
     profileId = existing.id;
@@ -405,7 +408,14 @@ async function saveProfileLayer(
     version = 1;
     const { data: inserted, error } = await supabase
       .from("prompt_profiles")
-      .insert({ owner_id: ownerId, project_id: pid, guidelines, prohibitions, version })
+      .insert({
+        owner_id: ownerId,
+        project_id: pid,
+        guidelines,
+        prohibitions,
+        brief_md: briefMd,
+        version,
+      })
       .select("id")
       .single();
     if (error) throw new Error(error.message);
@@ -422,6 +432,7 @@ async function saveProfileLayer(
       version,
       guidelines,
       prohibitions,
+      brief_md: briefMd,
       source,
     });
   if (histErr) {
@@ -473,6 +484,7 @@ export async function saveProfileItems(
   target: ProfileTarget,
   guidelines: ProfileItem[],
   prohibitions: ProfileItem[],
+  briefMd: string, // 배치 5 — 항목과 브리프를 한 버전으로 저장(부분 저장 없음)
 ): Promise<void> {
   const { userId, supabase } = await requireProjectOwner(projectId);
   await saveProfileLayer(
@@ -482,6 +494,7 @@ export async function saveProfileItems(
     projectId,
     sanitizeItems(guidelines),
     sanitizeItems(prohibitions),
+    briefMd.trim(),
     "edit",
   );
   revalidatePath(`/projects/${projectId}/profile`);
@@ -555,6 +568,7 @@ export async function applyProfileSuggestions(
     projectId,
     guidelines,
     prohibitions,
+    current.briefMd, // 예시 반영은 목록만 바꾼다 — 브리프는 현재 값 보존
     "ingest",
   );
   revalidatePath(`/projects/${projectId}/profile`);
@@ -571,7 +585,8 @@ export async function importProfileFromMarkdown(
   const parsed = parseProfileMarkdown(markdown);
   const guidelines = sanitizeItems(parsed.guidelines);
   const prohibitions = sanitizeItems(parsed.prohibitions);
-  if (guidelines.length === 0 && prohibitions.length === 0) {
+  const briefMd = parsed.brief.trim();
+  if (guidelines.length === 0 && prohibitions.length === 0 && briefMd === "") {
     throw new Error("가져올 항목을 찾지 못했습니다. 형식을 확인하세요.");
   }
   const { version } = await saveProfileLayer(
@@ -581,6 +596,7 @@ export async function importProfileFromMarkdown(
     projectId,
     guidelines,
     prohibitions,
+    briefMd,
     "import",
   );
   revalidatePath(`/projects/${projectId}/profile`);
@@ -593,6 +609,7 @@ export type ProfileVersionRow = {
   created_at: string;
   guidelines: ProfileItem[];
   prohibitions: ProfileItem[];
+  brief_md: string; // 배치 5 — 이력·복원이 브리프를 포함해 왕복
 };
 
 async function findProfileId(
@@ -622,7 +639,7 @@ export async function listProfileVersions(
   if (!profileId) return [];
   const { data } = await supabase
     .from("prompt_profile_versions")
-    .select("version, source, created_at, guidelines, prohibitions")
+    .select("version, source, created_at, guidelines, prohibitions, brief_md")
     .eq("profile_id", profileId)
     .order("version", { ascending: false });
   return (data ?? []) as ProfileVersionRow[];
@@ -639,7 +656,7 @@ export async function restoreProfileVersion(
   if (!profileId) throw new Error("프로필을 찾을 수 없습니다.");
   const { data: snap } = await supabase
     .from("prompt_profile_versions")
-    .select("guidelines, prohibitions")
+    .select("guidelines, prohibitions, brief_md")
     .eq("profile_id", profileId)
     .eq("version", version)
     .maybeSingle();
@@ -651,8 +668,45 @@ export async function restoreProfileVersion(
     projectId,
     snap.guidelines as ProfileItem[],
     snap.prohibitions as ProfileItem[],
+    snap.brief_md ?? "",
     "restore",
   );
   revalidatePath(`/projects/${projectId}/profile`);
   return { version: res.version };
+}
+// ── 최종 프롬프트 미리보기 (리팩토링 4 배치 5, P-7) ─────────────────────
+// "지금 무엇이 적용되는가"를 답한다: 실제 병합된 브리프·참고·금지·분량 설정으로
+// buildGenerationMessages를 조립해 돌려준다. **조회만** — DB 쓰기·LLM 호출 없음.
+// 학생 데이터 자리는 플레이스홀더 문구다(가짜 이름 없음 — INV-2의 서버 조립 원칙 그대로,
+// 클라이언트 텍스트 주입 경로도 없다).
+export async function previewGenerationPrompt(
+  projectId: string,
+): Promise<{ system: string; user: string }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const source = createSupabaseContextSource(supabase, userId);
+  const profile = await source.getMergedProfile(projectId);
+  const settings = await source.getRecordSettings(projectId);
+
+  const ctx: StudentContext = {
+    studentId: "(미리보기)",
+    studentName: "(미리보기)", // 프롬프트에 이름은 들어가지 않는다(기존 설계)
+    projectId,
+    submissions: [
+      {
+        id: "(제출물-id)",
+        content_text:
+          "[학생 제출물 1 — 실제 생성 시 이 자리에 해당 학생의 반영 제출물 원문이 들어갑니다]",
+        source_type: "manual",
+      },
+    ],
+    teacherMemo: "[교사 관찰 메모 — 실제 생성 시 해당 학생의 메모가 들어갑니다]",
+    guidelines: profile.guidelines,
+    prohibitions: profile.prohibitions,
+    brief: profile.brief,
+    charLimit: settings?.charLimit ?? 500,
+    countMethod: settings?.countMethod ?? "chars",
+  };
+
+  const [system, user] = buildGenerationMessages(ctx);
+  return { system: String(system.content), user: String(user.content) };
 }

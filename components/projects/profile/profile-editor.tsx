@@ -13,12 +13,14 @@ import {
   renderProfileMarkdown,
   parseProfileMarkdown,
 } from "@/lib/records/profile-markdown";
+import { PromptPreviewButton } from "@/components/projects/prompt-preview";
 import type { ProfileItem, ProfileVersionSource } from "@/lib/supabase/types";
 
 type Layer = "account" | "project";
 type LayerItems = {
   guidelines: ProfileItem[];
   prohibitions: ProfileItem[];
+  briefMd: string; // 작성 브리프(배치 5)
   version: number;
   updatedAt: string | null;
 };
@@ -84,11 +86,22 @@ export function ProfileEditor({
     setItems({ ...items, [field]: next });
   }
 
+  function updateBrief(next: string) {
+    setSaved(false);
+    setItems({ ...items, briefMd: next });
+  }
+
   function save() {
     setError(null);
     startTransition(async () => {
       try {
-        await saveProfileItems(projectId, layer, items.guidelines, items.prohibitions);
+        await saveProfileItems(
+          projectId,
+          layer,
+          items.guidelines,
+          items.prohibitions,
+          items.briefMd,
+        );
         setSaved(true);
         router.refresh();
       } catch (e) {
@@ -102,6 +115,7 @@ export function ProfileEditor({
       { title: LAYER_TITLE[layer], version: meta.version, updatedLabel: fmt(meta.updatedAt) },
       items.guidelines,
       items.prohibitions,
+      items.briefMd,
     );
     const blob = new Blob([md], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -166,14 +180,26 @@ export function ProfileEditor({
             "저장 전(버전 없음)"
           )}
         </span>
-        <button
-          type="button"
-          onClick={exportMd}
-          className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
-        >
-          MD 내보내기
-        </button>
+        <span className="flex items-center gap-2">
+          <PromptPreviewButton projectId={projectId} variant="zinc" />
+          <button
+            type="button"
+            onClick={exportMd}
+            className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            MD 내보내기
+          </button>
+        </span>
       </div>
+
+      {/* 작성 브리프 (배치 5, P-7) — 자유 markdown. 렌더러 없음(P-9): 소비자는 LLM이다. */}
+      <BriefPanel
+        layer={layer}
+        value={items.briefMd}
+        onChange={updateBrief}
+        onSave={save}
+        pending={pending}
+      />
 
       <div
         ref={containerRef}
@@ -223,8 +249,91 @@ export function ProfileEditor({
   );
 }
 
-function pick(l: LayerItems): { guidelines: ProfileItem[]; prohibitions: ProfileItem[] } {
-  return { guidelines: l.guidelines, prohibitions: l.prohibitions };
+function pick(l: LayerItems): {
+  guidelines: ProfileItem[];
+  prohibitions: ProfileItem[];
+  briefMd: string;
+} {
+  return { guidelines: l.guidelines, prohibitions: l.prohibitions, briefMd: l.briefMd };
+}
+
+// ── 작성 브리프 패널 (배치 5) — textarea 직접 편집 + MD 파일 업로드(채움만) ──
+function BriefPanel({
+  layer,
+  value,
+  onChange,
+  onSave,
+  pending,
+}: {
+  layer: Layer;
+  value: string;
+  onChange: (next: string) => void;
+  onSave: () => void;
+  pending: boolean;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [loadedName, setLoadedName] = useState<string | null>(null);
+
+  // 파일은 편집기를 채울 뿐이다 — 저장은 교사의 명시적 [저장](새 버전)뿐(무자동반영 원칙).
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    file.text().then((t) => {
+      onChange(t);
+      setLoadedName(file.name);
+    });
+    e.target.value = "";
+  }
+
+  return (
+    <div className="mb-3 rounded-lg border border-zinc-200 p-3 dark:border-zinc-800">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h3 className="text-sm font-semibold">작성 브리프 ({LAYER_TITLE[layer]})</h3>
+          <p className="mt-0.5 text-xs text-zinc-500">
+            활동 맥락·강조 포인트를 자유 markdown으로 서술합니다. 생성 프롬프트의
+            [활동·작성 관점 브리프] 섹션으로 주입됩니다 — 단, 근거 자료에 없는 내용은
+            브리프가 강조해도 서술되지 않습니다.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => fileRef.current?.click()}
+            className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            MD 파일 업로드
+          </button>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".md,.markdown,.txt,text/markdown,text/plain"
+            onChange={onFile}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={onSave}
+            disabled={pending}
+            className="rounded bg-zinc-800 px-3 py-1 text-xs font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900"
+          >
+            {pending ? "저장 중…" : "저장(새 버전)"}
+          </button>
+        </div>
+      </div>
+      <textarea
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        rows={8}
+        placeholder={"예)\n## 활동 개요\n자율 동아리 JAYUL — 협업 프로젝트 활동.\n\n## 강조 포인트\n- 협업·피드백 과정\n- 공동체를 위한 희생·봉사"}
+        className="w-full resize-y rounded-md border border-zinc-300 bg-white px-3 py-2 font-mono text-xs leading-relaxed outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+      />
+      <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
+        <span>{loadedName ? `파일 불러옴: ${loadedName} (저장 전까지 반영 안 됨)` : ""}</span>
+        <span>{value.length.toLocaleString()}자</span>
+      </div>
+    </div>
+  );
 }
 
 // ── MD 가져오기: 붙여넣기/파일 → 미리보기 → 확인 반영 ─────────────────────
@@ -241,6 +350,7 @@ function MarkdownImport({
   const [preview, setPreview] = useState<{
     guidelines: ProfileItem[];
     prohibitions: ProfileItem[];
+    brief: string;
   } | null>(null);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -260,8 +370,12 @@ function MarkdownImport({
     setError(null);
     setMsg(null);
     const parsed = parseProfileMarkdown(text);
-    if (parsed.guidelines.length === 0 && parsed.prohibitions.length === 0) {
-      setError("가져올 항목을 찾지 못했습니다. '## 작성 참고사항'·'## 금지사항' 아래 목록 형식을 확인하세요.");
+    if (
+      parsed.guidelines.length === 0 &&
+      parsed.prohibitions.length === 0 &&
+      parsed.brief.trim() === ""
+    ) {
+      setError("가져올 항목을 찾지 못했습니다. '## 작성 참고사항'·'## 금지사항'·'## 활동·작성 브리프' 형식을 확인하세요.");
       setPreview(null);
       return;
     }
@@ -328,12 +442,30 @@ function MarkdownImport({
         {error && <span className="text-xs text-red-600">{error}</span>}
       </div>
       {preview && (
-        <div className="mt-2 grid gap-3 text-xs sm:grid-cols-2">
-          <PreviewList title={`참고 ${preview.guidelines.length}`} items={preview.guidelines} />
-          <PreviewList title={`금지 ${preview.prohibitions.length}`} items={preview.prohibitions} />
+        <div className="mt-2 flex flex-col gap-3 text-xs">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <PreviewList title={`참고 ${preview.guidelines.length}`} items={preview.guidelines} />
+            <PreviewList title={`금지 ${preview.prohibitions.length}`} items={preview.prohibitions} />
+          </div>
+          <BriefPreview brief={preview.brief} />
         </div>
       )}
     </details>
+  );
+}
+
+function BriefPreview({ brief }: { brief: string }) {
+  return (
+    <div className="rounded border border-zinc-200 p-2 dark:border-zinc-800">
+      <div className="mb-1 font-semibold text-zinc-500">
+        브리프 {brief.trim() ? `${brief.length.toLocaleString()}자` : "(없음)"}
+      </div>
+      {brief.trim() && (
+        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-zinc-700 dark:text-zinc-300">
+          {brief}
+        </pre>
+      )}
+    </div>
   );
 }
 
@@ -437,9 +569,12 @@ function VersionHistoryPanel({
                 </button>
               </div>
               {expanded === v.version && (
-                <div className="grid gap-2 border-t border-zinc-200 p-2 text-xs dark:border-zinc-800 sm:grid-cols-2">
-                  <PreviewList title={`참고 ${v.guidelines.length}`} items={v.guidelines} />
-                  <PreviewList title={`금지 ${v.prohibitions.length}`} items={v.prohibitions} />
+                <div className="flex flex-col gap-2 border-t border-zinc-200 p-2 text-xs dark:border-zinc-800">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <PreviewList title={`참고 ${v.guidelines.length}`} items={v.guidelines} />
+                    <PreviewList title={`금지 ${v.prohibitions.length}`} items={v.prohibitions} />
+                  </div>
+                  <BriefPreview brief={v.brief_md ?? ""} />
                 </div>
               )}
             </li>

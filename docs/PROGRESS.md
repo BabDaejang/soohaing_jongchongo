@@ -432,3 +432,16 @@
 - 검증: `npm test` **274/274**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 0건(기존 14 유지), pg로 0014 스키마·check·RLS·기존 187행 origin 확인, **INV-6 코드 리딩 확인**(등급 입력 경로 없음 — 등급 셀은 읽기 전용 span, student_scores 쓰기는 recomputeAndSave뿐).
 - **DB 이력 정정**: 원격 `schema_migrations`가 0001~0009만 기록하고 있어(실제 스키마엔 0010~0013 적용됨) `db push`가 실패 → 객체 실존 전수 확인 후 `migration repair --status applied 0010~0013`로 **기록만** 정정하고 0014 적용. 이후 배치는 정상 push된다.
 - 다음: 배치 5(생기부 브리프, 마이그레이션 `0015_prompt_profile_brief.sql`).
+
+## 리팩토링 4 — 배치 5 (생기부 작성 브리프 MD) — 2026-08-21 ✅ 완료
+
+> 상세 진행·인계는 `docs/리팩토링_4_프로그레스.md`, 설계 판단은 `docs/DECISIONS.md`(2026-08-21 리팩토링 4 배치 5). 마이그레이션 **0015_prompt_profile_brief.sql** 원격 적용 완료.
+
+- [x] 마이그레이션 0015 — `prompt_profiles.brief_md`·`prompt_profile_versions.brief_md`(text not null default ''). RLS 불변.
+- [x] 병합·주입 — `MergedProfile.brief`(오버라이드 우선 단일 선택) · `StudentContext.brief` · 생성/문장 재생성 프롬프트에 `[활동·작성 관점 브리프]` 섹션(빈 값이면 생략) + system 근거 요건 우선 문구(가드 명문화, 검증 패스 불변).
+- [x] MD 왕복 — `## 활동·작성 브리프` 마지막 섹션 렌더, 2단계 헤더만 섹션 전환(브리프 속 `###`·목록 원문 보존), 구 MD 하위 호환.
+- [x] 저장 경로 — `saveProfileLayer`+briefMd(항목과 한 버전), import/이력/복원 브리프 왕복, 예시 반영은 브리프 보존.
+- [x] UI — ProfileEditor 브리프 패널(textarea·글자수·MD 업로드는 채움만·저장은 명시적) + `previewGenerationPrompt`(조회 전용) + `PromptPreviewButton`(프로필·페이즈 3).
+- [x] `tests/profile-brief.test.ts` 11건 + package.json 등록.
+- 검증: `npm test` **285/285**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 0건(기존 14 유지), pg로 0015 컬럼·RLS 불변·기존 행 '' 확인.
+- 다음: 배치 6(브리프 AI 협업 작성 — `draftBrief`·`refineBrief`, 자동 반영 금지).

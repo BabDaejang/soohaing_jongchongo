@@ -245,13 +245,15 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | project_id | uuid | FK → projects(id) on delete cascade, **NULL 허용** | NULL = 계정 기본 프로필, NOT NULL = 프로젝트 오버라이드 |
 | guidelines | jsonb | not null default '[]' | 작성 참고사항 목록: `[{id, text}]` |
 | prohibitions | jsonb | not null default '[]' | 금지사항 목록: `[{id, text}]` |
+| brief_md | text | not null default '' | **작성 브리프**(markdown 자유 서술 — 활동 맥락·강조 포인트, 리팩토링 4 배치 5, 0015). 소비자는 LLM(생성 프롬프트 `[활동·작성 관점 브리프]` 섹션 주입). 병합: 프로젝트 오버라이드의 brief가 공백 제거 후 비어 있지 않으면 그것만, 아니면 계정 기본의 brief (P-7) |
 | version | integer | not null default 1 | 저장/예시반영/가져오기/복원 시 +1 (세션 8a 확장, 0008). 화면에 버전·`updated_at` 표시 |
 | created_at / updated_at | timestamptz | | |
 
 - 세션 8a 마이그레이션 `0007_records_profiles.sql`. 팩의 `guidance`는 DATA_MODEL의 `guidelines`로 정합 (DECISIONS 2026-07-09).
 - unique: `(owner_id, project_id)` (project_id NULL 포함 — partial unique 2개: `(owner_id) where project_id is null`, `(owner_id, project_id) where project_id is not null`).
 - 시드(계정 최초 접근 시 `ensureDefaultProfile`): 문체 기본값 — 종결어미 '-함/-임/-됨', 학생 성명·인칭대명사 미표기 등. 실제 항목은 `docs/SEED_PROFILE.md` = `lib/prompts/seed-profile.ts` (SPEC 7.5).
-- 계층 병합(`lib/records/profile.ts` `mergeProfileLayers`): 계정 기본(base) → 프로젝트 오버라이드(우선, 뒤에 적용). 배치·UI 공용 순수 함수.
+- 계층 병합(`lib/records/profile.ts` `mergeProfileLayers`): 계정 기본(base) → 프로젝트 오버라이드(우선, 뒤에 적용). 배치·UI 공용 순수 함수. **brief는 목록과 달리 이어 붙이지 않는다** — 오버라이드가 비어 있지 않으면 그것만 쓴다(활동 맥락은 프로젝트마다 다르므로 겹쳐 읽히면 안 된다, P-7).
+- 브리프 주입(리팩토링 4 배치 5): `buildGenerationMessages`·`buildSentenceRegenMessages`의 user 프롬프트에 `[활동·작성 관점 브리프]` 섹션(빈 문자열이면 섹션 생략). system에 "브리프는 근거 요건보다 우선하지 않는다" 우선순위 명문화 — 브리프는 서술의 관점을 바꿀 뿐 근거 요건을 완화하지 않으며, 검증 패스(7.3)는 불변이다.
 - 예시 생기부 인제스트: LLM diff 제안은 저장하지 않고(`analyzeExample` 쓰기 없음) UI 상태로만, 교사 승인 항목만 `applyProfileSuggestions`가 반영 (자동 반영 금지).
 - **RLS**: `owner_id = auth.uid()`만(select/insert/update/delete 4정책, 쓰기는 +승인).
 
@@ -265,11 +267,12 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | project_id | uuid | FK → projects(id) on delete cascade, NULL 허용 | NULL = 계정 기본 |
 | version | integer | not null | unique `(profile_id, version)` |
 | guidelines / prohibitions | jsonb | not null | 저장 시점 스냅샷 |
+| brief_md | text | not null default '' | 브리프 스냅샷 (리팩토링 4 배치 5, 0015) — 버전 이력·복원이 브리프를 포함해 왕복한다 |
 | source | text | not null, check in ('seed','edit','ingest','import','restore') | 이력 출처 |
 | created_at | timestamptz | not null default now() | |
 
 - 저장/예시반영/가져오기/복원(`saveProfileLayer`) 시 `prompt_profiles.version`을 올리고 이 테이블에 스냅샷 1행을 남긴다. 복원=과거 스냅샷 항목을 새 버전으로 저장(이력 삭제 없음).
-- MD 내보내기/가져오기: `lib/records/profile-markdown.ts`(순수 render/parse). 가져오기는 서버가 재파싱(신뢰 경계) 후 반영.
+- MD 내보내기/가져오기: `lib/records/profile-markdown.ts`(순수 render/parse). 가져오기는 서버가 재파싱(신뢰 경계) 후 반영. **브리프 섹션(`## 활동·작성 브리프`) 포함 왕복**(배치 5) — 브리프 본문은 자유 markdown 원문 보존(내보내기가 브리프를 문서 마지막에 두므로 본문 속 `###` 등 하위 헤더가 안전하다. 단 본문에 `## …참고…`/`## …금지…` 2단계 헤더가 있으면 섹션 전환으로 읽힌다 — 알려진 한계).
 - **RLS**: `owner_id = auth.uid()` select + insert(+승인). update/delete 정책 없음(append-only).
 - 사용자 요청 확장(SPEC 7.5, DECISIONS 2026-07-10).
 
