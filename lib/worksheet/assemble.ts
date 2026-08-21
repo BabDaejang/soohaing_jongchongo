@@ -10,6 +10,7 @@ import type {
   MatchMethod,
   RubricCriterion,
 } from "@/lib/supabase/types";
+import { readClaimTitle } from "@/lib/factsheet/authenticity";
 import type {
   WorksheetEvaluation,
   WorksheetRow,
@@ -105,10 +106,7 @@ export function assembleWorksheetRows(input: {
     if (s.factsheets && typeof s.factsheets === "object" && "title" in s.factsheets) {
       factsheetTitle = (s.factsheets as { title: string }).title;
     } else {
-      const auth = s.authenticity as Record<string, any> | null;
-      if (auth?.claim?.title) {
-        factsheetTitle = auth.claim.title;
-      }
+      factsheetTitle = readClaimTitle(s.authenticity);
     }
     
     const entry: WorksheetSubmission = {

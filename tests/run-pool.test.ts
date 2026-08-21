@@ -266,7 +266,7 @@ describe("runPlanChain — 다단 연쇄", () => {
         stageOrder.push(`step:${name}:${t.id}`);
         return { ok: true, message: "ok" };
       },
-      finalize: async (_r) => {
+      finalize: async () => {
         stageOrder.push(`finalize:${name}`);
         return null;
       },

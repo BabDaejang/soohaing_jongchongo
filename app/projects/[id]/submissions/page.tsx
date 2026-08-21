@@ -3,7 +3,6 @@ import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ConfirmQueue, type QueueItem } from "@/components/projects/submissions/confirm-queue";
 import { StudentSubmissions, type SubRow } from "@/components/projects/submissions/student-submissions";
-import type { Submission } from "@/lib/supabase/types";
 
 // Phase 1(b) 확인 큐·제출물 상세 (SPEC 5.2·5.4, INV-5). 매칭 실행은 대시보드 페이즈 1
 // 단일 창구로 이동했다(리팩토링 2 배치 6) — 이 화면은 확인 큐·재귀속 전담.
@@ -39,7 +38,7 @@ export default async function SubmissionsPage({
   ]);
 
   const students = studentsRes.data ?? [];
-  const submissions = (submissionsRes.data ?? []) as any[];
+  const submissions = submissionsRes.data ?? [];
 
   const queue: QueueItem[] = submissions
     .filter((s) => s.match_status === "pending_confirm" || s.match_status === "update_pending")

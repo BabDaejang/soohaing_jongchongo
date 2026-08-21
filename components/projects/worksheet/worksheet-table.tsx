@@ -22,7 +22,6 @@ import {
   saveTeacherMemo,
 } from "@/app/projects/[id]/students/actions";
 import { countText } from "@/lib/text-count";
-import { AuthenticityBadge } from "@/components/projects/authenticity-badge";
 import type {
   CountMethod,
   GradingScheme,

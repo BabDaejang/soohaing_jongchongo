@@ -737,7 +737,12 @@ async function ingestMultiPagePdf(
         storage_path: path,
         student_id: seg.studentId,
         match_status: "auto_matched",
-        match_method: "auto_name",
+        // 귀속 경로 라벨 정합(리팩토링 4 배치 7): LLM이 명단에서 학생을 지목한 뒤 그 학생의
+        // 학번·이름을 raw_*에 그대로 적으므로, 일반 매칭 경로(classifyMatch)가 같은 식별값에
+        // 대해 내렸을 판정과 같은 값을 쓴다 — 학번이 있으면 auto_number, 없으면 auto_name.
+        // (기존에는 학번 유무와 무관하게 auto_name이라 "이름 유일 일치"를 과장했다.
+        //  match_method에는 check 제약이 없어 값 선택에 DDL이 필요 없다 — 0005·0011 확인.)
+        match_method: st?.student_number ? "auto_number" : "auto_name",
         identity_source: "llm",
         raw_student_no: st?.student_number ?? null,
         raw_student_name: st?.name ?? null,

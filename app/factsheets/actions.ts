@@ -538,9 +538,6 @@ export async function exportAllFactsheetsAction(): Promise<{
     throw new Error(`팩트시트 항목 조회 실패: ${entriesError.message}`);
   }
 
-  return {
-    factsheets: factsheets as any[],
-    entries: entries as any[],
-  };
+  return { factsheets, entries };
 }
 

@@ -146,8 +146,8 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | id | uuid | PK | |
 | project_id | uuid | not null, FK → projects(id) on delete cascade | |
 | student_id | uuid | FK → students(id) on delete set null, **NULL 허용** | 매칭 확정 전 NULL(세션 5는 항상 NULL). **NULL이면 평가·생성 컨텍스트에서 절대 제외** |
-| raw_student_no | text | | 업로드에서 추출한 원본 학번(매칭용, 세션 6). **세션 5 도입** (DECISIONS 2026-07-08) |
-| raw_student_name | text | | 업로드에서 추출한 원본 이름(매칭용, 세션 6). **세션 5 도입** |
+| raw_student_no | text | | 업로드에서 추출한 원본 학번(매칭용, 세션 6). **세션 5 도입** (DECISIONS 2026-07-08). **발견 스테이지도 이 컬럼을 쓴다**(리팩토링 4 배치 2 — 새 컬럼 없이 재사용) |
+| raw_student_name | text | | 업로드에서 추출한 원본 이름(매칭용, 세션 6). **세션 5 도입**. 발견 스테이지 공용 |
 | submission_key | text | | 시트의 제출물ID 열 값 또는 파일명. 중복 감지 키 `(project_id + 학생 식별값 + submission_key)` |
 | content_text | text | not null | 추출·정제된(정규화) 텍스트 (DB에는 이것만 저장 — SPEC 5.3) |
 | content_hash | text | not null | 정규화 텍스트 SHA-256 — 재업로드 중복·변경 감지 |
@@ -155,8 +155,8 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | source_filename | text | | 원본 파일명 |
 | storage_path | text | | Storage 임시 버킷 경로. 삭제 후 NULL |
 | match_status | text | not null default 'unmatched', check in ('unmatched','auto_matched','pending_confirm','confirmed','update_pending') | 세션 5 스테이징=unmatched / (a)학번 일치=auto_matched / (b)(c)=pending_confirm / 교사 확정=confirmed / 재업로드 내용 변경=update_pending. **'unmatched' 세션 5 도입** (DECISIONS 2026-07-08) |
-| match_method | text | | 귀속 경로(0005, 0011로 확장): auto_number(학번 일치)·auto_name(이름 유일 일치)·auto_new_number(column 출처 신규 학번)·confirmed_existing·confirmed_new·manual·reassigned(교사가 다른 학생으로 이동). 미귀속/대기 시 NULL |
-| identity_source | text | check in ('column','filename','llm') | 매칭에 쓴 학번·이름의 출처(0011, SPEC 5.2). column=스프레드시트 열, filename=파일명×명단 교차 대조, llm=문서 내용 추출. 수동·미확보 시 NULL |
+| match_method | text | | 귀속 경로(0005, 0011로 확장): auto_number(학번 일치)·auto_name(이름 유일 일치)·auto_new_number(column 출처 신규 학번)·confirmed_existing·confirmed_new·manual·reassigned(교사가 다른 학생으로 이동). 미귀속/대기 시 NULL. **check 제약이 없어 값 추가에 DDL이 불필요**(0005·0011). 다인용 PDF 분할의 LLM 페이지 귀속은 `identity_source='llm'` + 해당 식별값에 대해 classifyMatch가 내렸을 값(학번 있으면 auto_number, 없으면 auto_name)을 쓴다(리팩토링 4 배치 7 라벨 정합) |
+| identity_source | text | check in ('column','filename','llm') | 매칭에 쓴 학번·이름의 출처(0011, SPEC 5.2). column=스프레드시트 열, filename=파일명×명단 교차 대조, llm=문서 내용 추출. 수동·미확보 시 NULL. **발견 스테이지(리팩토링 4 배치 2)가 값의 의미를 넓힌다**: 명단이 없을 때도 `llm`(문서 앞부분 추출 + 토큰 실존 검증)·`filename`(명단 대조 없이 파일명 후보가 하나로 좁혀질 때)이 기록된다 — 값 집합·DDL은 불변 |
 | match_candidates | jsonb | | 확인 대기 큐용 후보: `[{student_id, name, student_number}]` (세션 6, 이름 일치 후보). LLM 후보 제안은 지연 실행되어 큐에서 즉석 표시 |
 | pending_content | jsonb | | update_pending일 때 새 내용·해시 보관 (교사 승인 전 원본 유지 — 자동 덮어쓰기 금지) |
 | include_in_eval | boolean | not null default true | 평가 반영 체크박스 |
@@ -169,6 +169,7 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 
 - 중복 감지 로직(세션 5): 업로드 시 `(project_id, 학생 식별값(raw_student_no/name), submission_key)`로 기존 행 조회 → content_hash 동일하면 스킵, 다르면 `match_status='update_pending'` + pending_content에 보관. 하드 unique 제약 대신 애플리케이션 로직(조회용 인덱스만) — update_pending 스테이징을 허용하기 위해 (DECISIONS 2026-07-08).
 - 세션 5는 매칭을 하지 않는다: 모든 파싱 행 `student_id NULL`·`match_status='unmatched'`. 매칭은 세션 6.
+- **발견(discovery) 스테이지**(SPEC 5.2, 리팩토링 4 배치 2 — **마이그레이션 없음**): 매칭 앞에 서서 명단 없이 식별값만 확보한다. 대상은 `match_status IN ('unmatched','pending_confirm')` + raw 둘 다 NULL + 비스프레드시트 제출물(다인용 PDF의 모호 페이지 포함). `discoverOne`은 `raw_student_no`·`raw_student_name`·`identity_source`만 update하고 **`student_id`·`match_status`는 건드리지 않는다**. 발견분이 학생이 되는 경로는 `createDiscoveredStudents`(교사 일괄 승인) 하나뿐이며, `classifyMatch`의 자동 생성 조건(column 출처 학번)은 불변이다.
 - 매칭(SPEC 5.2, 0011로 개정): `runMatching`이 식별값을 확보(column → filename×명단 교차 대조 → LLM 추출)한 뒤 순수 함수 `classifyMatch`로 분류한다. 자동 귀속은 **학번 완전 일치** 또는 **이름이 명단에 정확히 1명만 일치**할 때. 동명이인(2명 이상)·명단 미일치·학번 충돌·식별 불가는 pending_confirm. 신규 학생 자동 생성은 `identity_source='column'`이고 이름 충돌이 없을 때만(파일명·LLM 유래 학번으로는 학생을 만들지 않는다 — 유령 학생 방지). LLM 후보 제안은 확인 큐에서 지연 실행(callLLM purpose='매칭').
 - 재귀속(SPEC 5.4): `reassignSubmission`이 `student_id` 변경 + `match_status='confirmed'` + `match_method='reassigned'`. audit_logs에 이전/이후 student_id 기록. `flag_project_needs_recalc` 트리거가 "재계산 필요" 배지를 자동으로 세운다.
 - 원본 삭제(세션 6, INV-5): `deleteOriginal` 서버 액션이 `extraction_approved_at IS NULL`이면 거부. Storage 삭제는 API 경로라 DB 트리거로 못 막으므로 액션 가드가 강제 지점. 공유 storage_path(스프레드시트)는 다른 제출물이 참조하면 객체 유지. N일 자동 삭제는 `/api/cron/purge-originals`(CRON_SECRET) + `isPurgeEligible`(미승인 항상 제외).

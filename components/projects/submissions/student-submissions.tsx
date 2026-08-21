@@ -316,8 +316,8 @@ export function StudentSubmissions({
         if (priA !== priB) return (priA - priB) * factor;
       }
 
-      let valA: any = "";
-      let valB: any = "";
+      let valA = "";
+      let valB = "";
 
       if (key === "student_number") {
         valA = a.student_number ?? "";
@@ -334,7 +334,7 @@ export function StudentSubmissions({
       }
 
       if (valA === valB) return 0;
-      return valA.toString().localeCompare(valB.toString(), "ko", { numeric: true }) * factor;
+      return valA.localeCompare(valB, "ko", { numeric: true }) * factor;
     });
 
     return list;
@@ -508,7 +508,7 @@ export function StudentSubmissions({
               </div>
               {f.quote && (
                 <div className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-1 pl-2 border-l-2 border-zinc-300 bg-white/40 py-0.5 italic">
-                  근거 인용: "{f.quote}"
+                  근거 인용: &quot;{f.quote}&quot;
                 </div>
               )}
             </div>

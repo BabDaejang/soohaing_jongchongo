@@ -34,9 +34,10 @@ export function ColumnMapper({
   const [mapping, setMapping] = useState<ColumnMapping>(() => {
     let contentVal: Array<{ index: number; label: string }> = [];
     if (Array.isArray(initial.content)) {
-      contentVal = initial.content.map((item: any) => {
+      contentVal = initial.content.map((item: unknown) => {
         if (typeof item === "object" && item !== null && "index" in item) {
-          return { index: Number(item.index), label: String(item.label || "") };
+          const rec = item as { index: unknown; label?: unknown };
+          return { index: Number(rec.index), label: String(rec.label || "") };
         }
         const idx = Number(item);
         return { index: idx, label: headers[idx] || `열 ${idx}` };

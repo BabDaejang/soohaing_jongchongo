@@ -2,7 +2,10 @@
 
 import { requireProjectOwner } from "@/lib/projects";
 import { normalizeWorksheetLayout } from "@/lib/worksheet/layout";
-import { assembleWorksheetRows } from "@/lib/worksheet/assemble";
+import {
+  assembleWorksheetRows,
+  type SubmissionRaw,
+} from "@/lib/worksheet/assemble";
 import type { WorksheetRow } from "@/lib/worksheet/types";
 import type { UnassignedCount } from "@/lib/worksheet/unassigned";
 import type { RubricCriterion } from "@/lib/supabase/types";
@@ -44,7 +47,7 @@ export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRo
 
   return assembleWorksheetRows({
     students: studentsRes.data ?? [],
-    submissions: (subsRes.data as any) ?? [],
+    submissions: (subsRes.data ?? []) as SubmissionRaw[],
     scores: scoresRes.data ?? [],
     records: recordsRes.data ?? [],
     evaluations: evalsRes.data ?? [],

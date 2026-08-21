@@ -13,6 +13,7 @@ import {
 } from "@/app/projects/[id]/submissions/actions";
 import { BookSelectModal } from "@/components/projects/book-select-modal";
 import { emitWorksheetRefresh } from "@/lib/worksheet/refresh";
+import { readClaimTitle } from "@/lib/factsheet/authenticity";
 
 type StudentOpt = { id: string; student_number: string | null; name: string };
 type Candidate = { student_id: string; name: string; student_number: string | null };
@@ -104,13 +105,9 @@ function QueueRow({
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
   const [bookModalOpen, setBookModalOpen] = useState(false);
 
-  let factsheetTitle = "출처 식별 불가";
-  let hasBook = false;
-  const auth = item.authenticity as any;
-  if (auth?.claim?.title) {
-    factsheetTitle = auth.claim.title;
-    hasBook = true;
-  }
+  const claimTitle = readClaimTitle(item.authenticity);
+  const factsheetTitle = claimTitle ?? "출처 식별 불가";
+  const hasBook = claimTitle !== null;
   const selectedBooks = item.factsheet_id && hasBook
     ? [{ factsheetId: item.factsheet_id, title: factsheetTitle }]
     : [];

@@ -217,6 +217,17 @@ export function buildBookKey(
   return `title:${normalizeBookString(title)}|${normalizeBookString(author ?? "")}`;
 }
 
+// 저장된 authenticity jsonb에서 인용 출처 제목만 안전하게 읽는다 (리팩토링 4 배치 7).
+// 세 화면(작업결과표 조립·확인 큐·제출물 상세)이 각자 `as any`로 파고들던 것을 한곳으로 모았다
+// — jsonb는 unknown이므로 좁히는 책임이 한 군데 있어야 오독이 생기지 않는다.
+export function readClaimTitle(authenticity: unknown): string | null {
+  if (typeof authenticity !== "object" || authenticity === null) return null;
+  const claim = (authenticity as { claim?: unknown }).claim;
+  if (typeof claim !== "object" || claim === null) return null;
+  const title = (claim as { title?: unknown }).title;
+  return typeof title === "string" && title.trim() !== "" ? title : null;
+}
+
 export function mergeAuthenticity(
   existing: unknown,
   update: Record<string, unknown>,

@@ -3,6 +3,17 @@
 대한민국 고등학교 교사가 학생 수행평가 산출물을 수합·평가하고 학교생활기록부(생기부) 서술을 생성하는 웹앱.
 
 **최우선 요구사항 두 가지**: ① 학생 간 데이터 혼입 절대 금지, ② 산출물에 근거하지 않은 서술(할루시네이션) 금지.
+
+## 무엇을 하는가
+
+- **수합**: 파일(xlsx·csv·docx·pdf·이미지)을 올리면 텍스트를 추출하고, **발견 → 매칭**으로 학생별로 모은다.
+  명단이 비어 있어도 파일에서 학생을 찾아 **합집합 명단**을 만든다 — 다만 학생 추가는 **교사 일괄 승인**을 거친다.
+- **평가(선택)**: 루브릭 기반 LLM 채점 + 인용 출처 진실성 검증(플래그만). 기준별 결과를 작업결과표에서 보고
+  교사가 직접 고칠 수 있으며(이력 보존), 점수→순위→등급이 즉시 다시 파생된다. **등급 직접 입력은 없다**(INV-6).
+- **생기부**: 학생 1명 = LLM 호출 1회로 격리 생성(INV-1)하고 문장별 근거를 검증한다. 활동 맥락·강조 포인트는
+  **작성 브리프**(markdown)로 프롬프트에 주입하되, 브리프는 근거 요건보다 우선하지 않는다.
+- **작업결과표**: 대시보드 하단의 전폭 시트가 확인·수정의 허브다(미귀속 배너·매칭 배지·학생 이동·평가 상세·
+  점수 보정·생기부/메모 인라인 편집·xlsx/csv/md 다운로드).
 설계·불변 조건의 단일 진실 원천은 [`docs/SPEC.md`](docs/SPEC.md)이며, 불변 조건(INV-1~6)의 코드 보장 지점은
 [`docs/INVARIANTS_AUDIT.md`](docs/INVARIANTS_AUDIT.md)에 정리되어 있다.
 
@@ -81,7 +92,7 @@ npm run dev                    # http://localhost:3000
 
 ### 4.2 마이그레이션 적용
 
-DB 스키마·RLS는 `supabase/migrations/`의 SQL(0001~0009)로 관리한다. Supabase CLI로 적용한다:
+DB 스키마·RLS는 `supabase/migrations/`의 SQL(0001~0015)로 관리한다. Supabase CLI로 적용한다:
 
 ```bash
 supabase db push --db-url "$SUPABASE_DB_URL"
@@ -94,7 +105,14 @@ supabase db push --db-url "$SUPABASE_DB_URL"
 적용되는 것(요약): `profiles`·`app_settings`(0001), `providers`·`api_keys`·`audit_logs`(0002),
 `projects`·`students`·`rubrics`(0003), `submissions` + Storage `originals` 버킷·정책(0004), `match_method`(0005),
 `evaluations`·`student_scores`(0006), `records`·`prompt_profiles`(0007), `prompt_profile_versions`(0008),
-`ui_layouts`(0009). 모든 테이블 RLS 활성화.
+`ui_layouts`(0009), `api_keys.models`(0010), `submissions.identity_source`(0011),
+`student_scores.display_score`(0012), `factsheets`·`factsheet_entries` + `submissions` 진실성 3컬럼(0013),
+`evaluations.origin`(0014), `prompt_profiles.brief_md`·`prompt_profile_versions.brief_md`(0015).
+모든 테이블 RLS 활성화.
+
+> 마이그레이션 이력이 실제 스키마보다 뒤처져 `db push`가 이미 적용된 파일을 다시 실행하려 하면,
+> 객체 실존을 확인한 뒤 `supabase migration repair --status applied <버전…>`으로 **기록만** 정정하고
+> 다시 push한다(스키마·데이터 무변경 — DECISIONS 2026-08-20).
 
 ### 4.3 시드(자동 — 별도 SQL 실행 불필요)
 
