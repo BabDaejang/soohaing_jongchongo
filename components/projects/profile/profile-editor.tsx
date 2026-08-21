@@ -7,6 +7,9 @@ import {
   importProfileFromMarkdown,
   listProfileVersions,
   restoreProfileVersion,
+  draftBrief,
+  refineBrief,
+  extractBriefSourceText,
   type ProfileVersionRow,
 } from "@/app/projects/[id]/records/actions";
 import {
@@ -194,6 +197,7 @@ export function ProfileEditor({
 
       {/* 작성 브리프 (배치 5, P-7) — 자유 markdown. 렌더러 없음(P-9): 소비자는 LLM이다. */}
       <BriefPanel
+        projectId={projectId}
         layer={layer}
         value={items.briefMd}
         onChange={updateBrief}
@@ -259,12 +263,14 @@ function pick(l: LayerItems): {
 
 // ── 작성 브리프 패널 (배치 5) — textarea 직접 편집 + MD 파일 업로드(채움만) ──
 function BriefPanel({
+  projectId,
   layer,
   value,
   onChange,
   onSave,
   pending,
 }: {
+  projectId: string;
   layer: Layer;
   value: string;
   onChange: (next: string) => void;
@@ -273,6 +279,8 @@ function BriefPanel({
 }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [loadedName, setLoadedName] = useState<string | null>(null);
+  // AI 협업 모달 (배치 6, P-8). 결과는 편집기를 채울 뿐 저장되지 않는다.
+  const [aiMode, setAiMode] = useState<"draft" | "refine" | null>(null);
 
   // 파일은 편집기를 채울 뿐이다 — 저장은 교사의 명시적 [저장](새 버전)뿐(무자동반영 원칙).
   function onFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -296,7 +304,23 @@ function BriefPanel({
             브리프가 강조해도 서술되지 않습니다.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setAiMode("draft")}
+            className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            AI로 초안 만들기
+          </button>
+          <button
+            type="button"
+            onClick={() => setAiMode("refine")}
+            disabled={!value.trim()}
+            title={value.trim() ? "현재 브리프를 요청대로 고칩니다" : "먼저 브리프 내용을 작성하세요"}
+            className="rounded border border-zinc-300 px-2 py-1 text-xs hover:bg-zinc-50 disabled:opacity-40 dark:border-zinc-700 dark:hover:bg-zinc-800"
+          >
+            AI로 다듬기
+          </button>
           <button
             type="button"
             onClick={() => fileRef.current?.click()}
@@ -331,6 +355,250 @@ function BriefPanel({
       <div className="mt-1 flex items-center justify-between text-xs text-zinc-400">
         <span>{loadedName ? `파일 불러옴: ${loadedName} (저장 전까지 반영 안 됨)` : ""}</span>
         <span>{value.length.toLocaleString()}자</span>
+      </div>
+
+      {aiMode && (
+        <BriefAiModal
+          projectId={projectId}
+          mode={aiMode}
+          currentMd={value}
+          onClose={() => setAiMode(null)}
+          onApply={(md) => {
+            onChange(md); // 편집기만 교체 — 저장은 교사의 [저장(새 버전)]뿐(P-8)
+            setAiMode(null);
+            setLoadedName(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ── 브리프 AI 협업 모달 (배치 6, P-8) — 초안 생성 / 다듬기 ──────────────
+// AI 출력은 **미리보기로만** 보여 주고, [편집기에 반영]을 눌러야 편집기 내용이 바뀐다.
+// 그마저도 저장이 아니다 — 저장은 교사가 [저장(새 버전)]을 눌러야 일어난다.
+function BriefAiModal({
+  projectId,
+  mode,
+  currentMd,
+  onClose,
+  onApply,
+}: {
+  projectId: string;
+  mode: "draft" | "refine";
+  currentMd: string;
+  onClose: () => void;
+  onApply: (md: string) => void;
+}) {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [activityName, setActivityName] = useState("");
+  const [description, setDescription] = useState("");
+  const [emphasis, setEmphasis] = useState("");
+  const [freeText, setFreeText] = useState("");
+  const [attachedText, setAttachedText] = useState("");
+  const [attachedName, setAttachedName] = useState<string | null>(null);
+  const [request, setRequest] = useState("");
+  const [result, setResult] = useState<string | null>(null);
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // 같은 파일 재선택 허용
+    if (!file) return;
+    setError(null);
+    startTransition(async () => {
+      try {
+        const fd = new FormData();
+        fd.set("file", file);
+        const r = await extractBriefSourceText(projectId, fd);
+        setAttachedText(r.text);
+        setAttachedName(`${r.filename} (${r.text.length.toLocaleString()}자)`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "파일 추출 실패");
+      }
+    });
+  }
+
+  function run() {
+    setError(null);
+    setResult(null);
+    startTransition(async () => {
+      try {
+        const r =
+          mode === "draft"
+            ? await draftBrief(projectId, {
+                activityName,
+                description,
+                emphasis,
+                freeText,
+                attachedText,
+              })
+            : await refineBrief(projectId, currentMd, request);
+        setResult(r.md);
+      } catch (e) {
+        const m = e instanceof Error ? e.message : "AI 호출 실패";
+        setError(m.slice(0, 300)); // 300자 절단 관행
+      }
+    });
+  }
+
+  const inputClass =
+    "w-full rounded-md border border-zinc-300 bg-white px-3 py-2 text-xs outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-zinc-300 bg-white shadow-xl dark:border-zinc-700 dark:bg-zinc-950"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+          <h3 className="text-sm font-semibold text-zinc-800 dark:text-zinc-100">
+            {mode === "draft" ? "AI로 브리프 초안 만들기" : "AI로 브리프 다듬기"}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded px-2 py-1 text-sm text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+          >
+            닫기 ✕
+          </button>
+        </div>
+
+        <div className="flex flex-col gap-3 overflow-y-auto p-4 text-xs">
+          <p className="text-zinc-500 dark:text-zinc-400">
+            AI 결과는 <b>편집기를 채울 뿐 저장되지 않습니다</b> — 확인·수정 후 [저장(새
+            버전)]을 눌러야 반영됩니다.
+          </p>
+
+          {mode === "draft" ? (
+            <>
+              <label className="flex flex-col gap-1">
+                <span className="font-semibold text-zinc-600 dark:text-zinc-300">활동명</span>
+                <input
+                  value={activityName}
+                  onChange={(e) => setActivityName(e.target.value)}
+                  placeholder="예) 자율 동아리 JAYUL 협업 프로젝트"
+                  className={inputClass}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="font-semibold text-zinc-600 dark:text-zinc-300">활동 설명</span>
+                <textarea
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  rows={3}
+                  placeholder="어떤 활동인지, 학생들이 무엇을 했는지"
+                  className={`${inputClass} resize-y`}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="font-semibold text-zinc-600 dark:text-zinc-300">
+                  강조하고 싶은 포인트
+                </span>
+                <textarea
+                  value={emphasis}
+                  onChange={(e) => setEmphasis(e.target.value)}
+                  rows={3}
+                  placeholder="예) 협업 과정, 친구 결과물에 대한 판단과 피드백, 상호 발전, 희생·봉사 정신"
+                  className={`${inputClass} resize-y`}
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="font-semibold text-zinc-600 dark:text-zinc-300">자유 보충</span>
+                <textarea
+                  value={freeText}
+                  onChange={(e) => setFreeText(e.target.value)}
+                  rows={2}
+                  placeholder="그 밖에 참고할 맥락"
+                  className={`${inputClass} resize-y`}
+                />
+              </label>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileRef.current?.click()}
+                  disabled={pending}
+                  className="rounded border border-zinc-300 px-2 py-1 hover:bg-zinc-50 disabled:opacity-60 dark:border-zinc-700 dark:hover:bg-zinc-800"
+                >
+                  평가계획서·안내문 첨부(선택)
+                </button>
+                <input
+                  ref={fileRef}
+                  type="file"
+                  accept=".txt,.md,.docx,.pdf,.xlsx,.csv"
+                  onChange={onFile}
+                  className="hidden"
+                />
+                {attachedName && <span className="text-zinc-500">{attachedName}</span>}
+              </div>
+              <p className="text-zinc-400">
+                txt·md·docx·pdf·xlsx·csv 지원. 한글(hwp)은 PDF/docx로 저장 후 첨부하세요.
+              </p>
+            </>
+          ) : (
+            <label className="flex flex-col gap-1">
+              <span className="font-semibold text-zinc-600 dark:text-zinc-300">수정 요청</span>
+              <input
+                value={request}
+                onChange={(e) => setRequest(e.target.value)}
+                placeholder="예) 봉사 관련 강조를 더 구체적으로, 서술 지침은 3줄 이내로"
+                className={inputClass}
+              />
+            </label>
+          )}
+
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={run}
+              disabled={pending}
+              className="rounded bg-zinc-800 px-3 py-1.5 font-medium text-white hover:bg-zinc-700 disabled:opacity-60 dark:bg-zinc-200 dark:text-zinc-900"
+            >
+              {pending ? "생성 중…" : mode === "draft" ? "초안 생성" : "다듬기 실행"}
+            </button>
+            {error && <span className="text-red-600">{error}</span>}
+          </div>
+
+          {result !== null && (
+            <div className="flex flex-col gap-2">
+              {mode === "refine" && (
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <BriefPreview brief={currentMd} />
+                  <div className="rounded border border-zinc-200 p-2 dark:border-zinc-800">
+                    <div className="mb-1 font-semibold text-zinc-500">제안</div>
+                    <pre className="max-h-60 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-zinc-700 dark:text-zinc-300">
+                      {result}
+                    </pre>
+                  </div>
+                </div>
+              )}
+              {mode === "draft" && (
+                <div className="rounded border border-zinc-200 p-2 dark:border-zinc-800">
+                  <div className="mb-1 font-semibold text-zinc-500">초안 미리보기</div>
+                  <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap font-mono text-[11px] text-zinc-700 dark:text-zinc-300">
+                    {result}
+                  </pre>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onApply(result)}
+                  className="rounded bg-zinc-800 px-3 py-1.5 font-medium text-white hover:bg-zinc-700 dark:bg-zinc-200 dark:text-zinc-900"
+                >
+                  편집기에 반영
+                </button>
+                <span className="text-zinc-400">
+                  반영해도 저장되지 않습니다 — 편집기에서 확인 후 저장하세요.
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

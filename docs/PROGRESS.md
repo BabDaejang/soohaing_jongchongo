@@ -445,3 +445,14 @@
 - [x] `tests/profile-brief.test.ts` 11건 + package.json 등록.
 - 검증: `npm test` **285/285**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 0건(기존 14 유지), pg로 0015 컬럼·RLS 불변·기존 행 '' 확인.
 - 다음: 배치 6(브리프 AI 협업 작성 — `draftBrief`·`refineBrief`, 자동 반영 금지).
+
+## 리팩토링 4 — 배치 6 (브리프 AI 협업 작성) — 2026-08-21 ✅ 완료
+
+> 상세 진행·인계는 `docs/리팩토링_4_프로그레스.md`, 설계 판단은 `docs/DECISIONS.md`(2026-08-21 리팩토링 4 배치 6). **마이그레이션·스키마 변경 없음**(0015 불변).
+
+- [x] `lib/prompts/brief.ts` 신설 — `buildBriefDraftMessages`(4섹션 구조 지시) · `buildBriefRefineMessages`(전체 MD 반환) + 공통 자기 제약 "근거 자료에 없는 내용을 강조하도록 지시하지 말 것" + `stripCodeFence`.
+- [x] 서버 액션 `draftBrief`·`refineBrief`·`extractBriefSourceText` — **전부 DB 쓰기 없음**(제안 전용). 재료 없는 초안 요청은 호출 전 거부.
+- [x] BriefPanel에 [AI로 초안 만들기]·[AI로 다듬기] 모달 — 폼(JAYUL 예시 플레이스홀더)·파일 첨부·현재/제안 비교, [편집기에 반영]은 편집기만 교체(저장 아님).
+- [x] `tests/brief-prompt.test.ts` 7건 + package.json 등록.
+- 검증: `npm test` **292/292**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 0건(기존 14 유지), **무자동반영 grep 확인**(두 액션 본문에 DB 쓰기 0건, saveProfileLayer 호출자는 교사 명시 액션 4개뿐).
+- 다음: 배치 7(SPEC/DATA_MODEL 개정 + 기존 `any` 11건 정리 + 최종 검증) — 리팩토링 4의 마지막 배치.

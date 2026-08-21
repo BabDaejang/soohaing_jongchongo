@@ -19,6 +19,12 @@ import {
 } from "@/lib/prompts/generation";
 import { buildVerificationMessages } from "@/lib/prompts/verification";
 import { buildExampleAnalysisMessages } from "@/lib/prompts/example-ingest";
+import {
+  buildBriefDraftMessages,
+  buildBriefRefineMessages,
+  stripCodeFence,
+  type BriefDraftInput,
+} from "@/lib/prompts/brief";
 import { parseVerification, countUnsupported } from "@/lib/records/verification";
 import { parseSuggestions, type ProfileSuggestion } from "@/lib/records/suggestions";
 import { parseProfileMarkdown } from "@/lib/records/profile-markdown";
@@ -709,4 +715,92 @@ export async function previewGenerationPrompt(
 
   const [system, user] = buildGenerationMessages(ctx);
   return { system: String(system.content), user: String(user.content) };
+}
+// ── 브리프 AI 협업 작성 (리팩토링 4 배치 6, P-8) ─────────────────────────
+// **둘 다 DB 쓰기가 없다.** 반환한 MD는 편집기(BriefPanel)를 채울 뿐이고, 저장은 언제나
+// 교사의 명시적 [저장](saveProfileItems → 새 버전)이다 — 예시 인제스트(analyzeExample)와
+// 같은 무자동반영 원칙. AI가 스스로 프로필을 바꾸는 경로는 존재하지 않는다.
+
+// 첨부 파일(평가계획서·활동 안내문) 텍스트 추출. 클라이언트가 아니라 서버에서 뽑는다
+// (기존 extractExampleText와 같은 관행 — 지원 형식·에러 문구 재사용).
+export async function extractBriefSourceText(
+  projectId: string,
+  formData: FormData,
+): Promise<{ text: string; filename: string }> {
+  await requireProjectOwner(projectId);
+  const file = formData.get("file");
+  if (!(file instanceof File)) throw new Error("파일이 없습니다.");
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const text = await extractTextFromExampleFile(file.name, bytes);
+  return { text, filename: file.name };
+}
+
+export type BriefDraftFormInput = {
+  activityName: string;
+  description: string;
+  emphasis: string;
+  freeText: string;
+  attachedText: string;
+};
+
+// 폼 입력 → 브리프 MD 초안. 저장하지 않는다.
+export async function draftBrief(
+  projectId: string,
+  input: BriefDraftFormInput,
+): Promise<{ md: string }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  const clean: BriefDraftInput = {
+    activityName: (input.activityName ?? "").trim(),
+    description: (input.description ?? "").trim(),
+    emphasis: (input.emphasis ?? "").trim(),
+    freeText: (input.freeText ?? "").trim(),
+    attachedText: (input.attachedText ?? "").trim(),
+  };
+  // 재료가 하나도 없으면 모델이 활동을 통째로 지어낸다 — 호출 전에 막는다.
+  if (
+    !clean.activityName &&
+    !clean.description &&
+    !clean.emphasis &&
+    !clean.freeText &&
+    !clean.attachedText
+  ) {
+    throw new Error("활동명·설명·강조 포인트 중 하나 이상을 입력하세요.");
+  }
+
+  const routing = await getRouting(supabase, projectId);
+  const res = await callLLM({
+    userId,
+    purpose: "생성",
+    modelRouting: routing,
+    messages: buildBriefDraftMessages(clean),
+  });
+  const md = stripCodeFence(res.text);
+  if (!md) throw new Error("초안이 비어 있습니다. 입력을 보강해 다시 시도하세요.");
+  return { md };
+}
+
+// 현재 브리프 + 요청 → 수정된 전문. 저장하지 않는다.
+export async function refineBrief(
+  projectId: string,
+  currentMd: string,
+  request: string,
+): Promise<{ md: string }> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+
+  const current = (currentMd ?? "").trim();
+  const req = (request ?? "").trim();
+  if (!current) throw new Error("다듬을 브리프가 비어 있습니다. 먼저 내용을 작성하세요.");
+  if (!req) throw new Error("수정 요청을 입력하세요.");
+
+  const routing = await getRouting(supabase, projectId);
+  const res = await callLLM({
+    userId,
+    purpose: "생성",
+    modelRouting: routing,
+    messages: buildBriefRefineMessages(current, req),
+  });
+  const md = stripCodeFence(res.text);
+  if (!md) throw new Error("다듬기 결과가 비어 있습니다.");
+  return { md };
 }
