@@ -58,3 +58,68 @@ export function computeStandings(
   }
   return result;
 }
+
+// ── 목표 등급 → 보정 점수 구간 (리팩토링 4 배치 4, P-4) ──────────────────
+//
+// INV-6은 등급의 직접 저장·수정을 금지한다. 그래서 "이 학생을 N등급으로" 같은 입력은 만들지
+// 않고, 대신 **그 등급이 나오는 보정 점수 구간**을 계산해 교사가 점수를 넣게 돕는다.
+// 등급은 여전히 점수에서 파생될 뿐이며, 이 함수는 아무것도 저장하지 않는다(순수 계산).
+
+// 보정 점수의 정의역 — students.score_override와 같은 0~999 정수(표시 점수 스케일).
+const OVERRIDE_MIN = 0;
+const OVERRIDE_MAX = 999;
+
+// 후보 점수를 끼워 넣었을 때 그 학생이 받게 될 등급.
+// computeStandings는 입력 순서를 보존하므로 마지막 원소가 후보다.
+function gradeWithCandidate(
+  otherScores: number[],
+  candidate: number,
+  scheme: GradingScheme,
+  tieBreak: TieBreak,
+): number {
+  const standings = computeStandings([...otherScores, candidate], scheme, tieBreak);
+  return standings[standings.length - 1].grade;
+}
+
+// 등급은 점수에 대해 **단조**다(점수가 오르면 등급 번호는 같거나 작아진다) — 동점 처리
+// 양쪽(best_grade·mid_rank) 모두에서 성립하므로 목표 등급 구간을 이진 탐색으로 찾을 수 있다.
+export function overrideRangeForGrade(
+  otherScores: number[],
+  scheme: GradingScheme,
+  tieBreak: TieBreak,
+  targetGrade: number,
+): { min: number; max: number } | null {
+  const gradeCount = GRADE_BOUNDARIES[scheme].length;
+  if (!Number.isInteger(targetGrade) || targetGrade < 1 || targetGrade > gradeCount) {
+    return null;
+  }
+
+  const gradeAt = (c: number) =>
+    gradeWithCandidate(otherScores, c, scheme, tieBreak);
+
+  // min = gradeAt(c) <= target을 만족하는 가장 작은 c (술어가 false→true로 단조).
+  let lo = OVERRIDE_MIN;
+  let hi = OVERRIDE_MAX;
+  if (gradeAt(OVERRIDE_MAX) > targetGrade) return null; // 최고점으로도 도달 못 함
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (gradeAt(mid) <= targetGrade) hi = mid;
+    else lo = mid + 1;
+  }
+  const min = lo;
+
+  // max = gradeAt(c) >= target을 만족하는 가장 큰 c (술어가 true→false로 단조).
+  lo = OVERRIDE_MIN;
+  hi = OVERRIDE_MAX;
+  if (gradeAt(OVERRIDE_MIN) < targetGrade) return null; // 최저점으로도 그 등급보다 좋다
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (gradeAt(mid) >= targetGrade) lo = mid;
+    else hi = mid - 1;
+  }
+  const max = lo;
+
+  // 인원·비율상 그 등급이 아예 비는 경우가 있다(예: 소인원에서 중간 등급).
+  if (min > max || gradeAt(min) !== targetGrade) return null;
+  return { min, max };
+}

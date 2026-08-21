@@ -211,6 +211,9 @@ export type EvaluationCriterionScore = {
   evidence_quote: string; // 근거 인용 필수 (SPEC 6절)
 };
 
+// 채점 주체 (0014, 리팩토링 4 배치 4). teacher = 교사가 기준별 점수를 고친 행.
+export type EvaluationOrigin = "llm" | "teacher";
+
 export type Evaluation = {
   id: string;
   submission_id: string;
@@ -218,8 +221,9 @@ export type Evaluation = {
   scores: EvaluationCriterionScore[];
   total_score: number;
   content_hash: string; // 채점 당시 제출물 해시 — 증분 재평가 판정
-  raw_llm_output: string;
-  model: string;
+  raw_llm_output: string | null; // origin='teacher'면 null (0014)
+  model: string | null; // origin='teacher'면 null (0014)
+  origin: EvaluationOrigin;
   is_current: boolean;
   created_at: string;
 };
@@ -530,8 +534,9 @@ export type Database = {
           scores: EvaluationCriterionScore[];
           total_score: number;
           content_hash: string;
-          raw_llm_output: string;
-          model: string;
+          raw_llm_output: string | null;
+          model: string | null;
+          origin?: EvaluationOrigin;
           is_current?: boolean;
         };
         Update: Partial<Pick<Evaluation, "is_current">>;

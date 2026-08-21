@@ -419,3 +419,16 @@
 - [x] `tests/worksheet-unassigned.test.ts` 8건 신규 + package.json 등록.
 - 검증: `npm test` **254/254**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 0건(기존 14 유지).
 - 다음: 배치 4(평가 리뷰·수정, 마이그레이션 `0014_evaluations_origin.sql`). 기준별 채점 UI는 제출물 펼침 **셀**에 붙이는 것이 자연스럽다(헤더는 이미 밀도가 높음). 새 서브행 필드는 조회부 **두 곳**(`page.tsx`·`worksheet-actions.ts`)을 모두 고쳐야 한다.
+
+## 리팩토링 4 — 배치 4 (평가 리뷰·수정 · 목표 등급 헬퍼) — 2026-08-20 ✅ 완료
+
+> 상세 진행·인계는 `docs/리팩토링_4_프로그레스.md`, 설계 판단은 `docs/DECISIONS.md`(2026-08-20 리팩토링 4 배치 4). 마이그레이션 **0014_evaluations_origin.sql** 원격 적용 완료.
+
+- [x] 마이그레이션 0014 — `evaluations.origin`('llm'|'teacher', default 'llm') + model·raw_llm_output nullable 완화 + `evaluations_llm_fields` check. **RLS 정책 무변경**(쓰기는 그대로 service role 전용).
+- [x] 서버 액션 — `saveEvaluationEdit`(검증 → origin='teacher' 이력 insert → 감사 로그 → 즉시 `recomputeAndSave`) · `rescoreOne`(강제 AI 재채점). `evaluateOne`은 공용 코어에 위임만(시그니처·프롬프트 불변).
+- [x] 순수 함수 — `overrideRangeForGrade`(목표 등급 → 보정 점수 구간, 이진 탐색) · `validateTeacherScores`(클램프 아닌 **거부**).
+- [x] 작업결과표 — 제출물 펼침 셀에 기준별 점수·근거·합계·origin 배지 + [점수 수정]·[AI 재채점], `ScoreCell`에 목표 등급 select. Phase2Panel 안내 문구.
+- [x] `tests/override-grade.test.ts` 10건 + `tests/evaluation-edit.test.ts` 10건 + package.json 등록.
+- 검증: `npm test` **274/274**, `tsc --noEmit` 무오류, `next build` 성공, `eslint` 신규 0건(기존 14 유지), pg로 0014 스키마·check·RLS·기존 187행 origin 확인, **INV-6 코드 리딩 확인**(등급 입력 경로 없음 — 등급 셀은 읽기 전용 span, student_scores 쓰기는 recomputeAndSave뿐).
+- **DB 이력 정정**: 원격 `schema_migrations`가 0001~0009만 기록하고 있어(실제 스키마엔 0010~0013 적용됨) `db push`가 실패 → 객체 실존 전수 확인 후 `migration repair --status applied 0010~0013`로 **기록만** 정정하고 0014 적용. 이후 배치는 정상 push된다.
+- 다음: 배치 5(생기부 브리프, 마이그레이션 `0015_prompt_profile_brief.sql`).

@@ -185,14 +185,17 @@ profiles 1─N prompt_profiles (project_id NULL = 계정 기본)
 | scores | jsonb | not null | 기준별: `[{criterion_id, score, evidence_quote}]` — 근거 인용 필수 (SPEC 6절) |
 | total_score | numeric | not null | 기준 점수 합산 (루브릭 배점 기준) |
 | content_hash | text | not null | 채점 당시 제출물 content_hash 스냅샷 — 증분 재평가 판정용. **세션 7 도입** (DECISIONS 2026-07-09) |
-| raw_llm_output | text | not null | 감사용 LLM 원문 출력 보관 |
-| model | text | not null | 사용 모델 식별자 |
+| raw_llm_output | text | **nullable**(0014) | 감사용 LLM 원문 출력 보관. `origin='teacher'`면 NULL |
+| model | text | **nullable**(0014) | 사용 모델 식별자. `origin='teacher'`면 NULL |
+| origin | text | not null, check in ('llm','teacher'), default 'llm' | 채점 주체 (**리팩토링 4 배치 4 도입, 0014**). llm=AI 채점, teacher=교사 수정 |
 | is_current | boolean | not null default true | 재채점 시 이전 행 false — 이력 보존 |
 | created_at | timestamptz | not null default now() | |
 
 - 재채점은 update가 아닌 insert (감사 이력). `(submission_id, is_current=true)` partial unique.
 - **증분 재평가**(세션 7, 수용 5): 현재 평가(is_current)의 `content_hash`가 제출물의 현재 `content_hash`와 같으면 재채점을 건너뛴다. 다르거나 현재 평가가 없으면 새로 채점. 반영 체크박스만 바뀐 경우(content_hash 불변)는 재채점하지 않는다.
-- **RLS**: 프로젝트 소유자 select만. **insert/update는 서버(service role) 전용** — 채점 결과는 클라이언트가 위조할 수 없다.
+- **교사 수정**(리팩토링 4 배치 4, 0014): 교사가 기준별 점수를 고치면 update가 아니라 `origin='teacher'` 새 행을 insert하고 이전 행을 `is_current=false`로 내린다 — LLM 원본은 이력에 그대로 남는다. 새 행의 `content_hash`는 제출물의 **현재** 해시를 그대로 쓰므로, 내용이 그대로인 한 일괄 채점([채점 실행])의 증분 판정이 이 행을 건너뛰어 **교사 수정이 AI에 덮이지 않는다**. 반대로 제출물 내용이 바뀌면 해시가 달라져 AI가 재채점하고 교사 수정본을 대체한다(의도된 규칙 — 근거가 바뀌었으므로). 특정 1건을 즉시 AI로 되돌리려면 `rescoreOne`(강제 재채점)을 쓴다.
+- `evaluations_llm_fields` check(0014): `origin='teacher'`가 아니면 `model`·`raw_llm_output`이 반드시 NOT NULL — LLM 행의 감사 추적성은 완화되지 않는다.
+- **RLS**: 프로젝트 소유자 select만. **insert/update는 서버(service role) 전용** — 채점 결과는 클라이언트가 위조할 수 없다. **교사 수정도 예외가 아니다**(0014에서 정책 변경 없음): 서버 액션 `saveEvaluationEdit`이 requireProjectOwner + service role + 감사 로그(`evaluation.teacher_edit`)로만 기록한다.
 
 ## 10. student_scores — 학생별 합성 점수·순위·등급 (INV-6)
 

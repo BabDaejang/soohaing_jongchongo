@@ -11,6 +11,8 @@ import { reassignSubmission } from "@/app/projects/[id]/submissions/actions";
 import {
   setScoreOverride,
   clearScoreOverride,
+  saveEvaluationEdit,
+  rescoreOne,
 } from "@/app/projects/[id]/evaluate/actions";
 import { saveRecordEdit } from "@/app/projects/[id]/records/actions";
 import {
@@ -21,12 +23,20 @@ import {
 } from "@/app/projects/[id]/students/actions";
 import { countText } from "@/lib/text-count";
 import { AuthenticityBadge } from "@/components/projects/authenticity-badge";
-import type { CountMethod, IdentitySource, MatchMethod } from "@/lib/supabase/types";
+import type {
+  CountMethod,
+  GradingScheme,
+  IdentitySource,
+  MatchMethod,
+  TieBreak,
+} from "@/lib/supabase/types";
+import { GRADE_BOUNDARIES, overrideRangeForGrade } from "@/lib/grading";
 import { BookSelectModal } from "@/components/projects/book-select-modal";
 import {
   WORKSHEET_COLUMNS,
   COLUMN_LABELS,
   type WorksheetColumnKey,
+  type WorksheetEvaluation,
   type WorksheetRow,
 } from "@/lib/worksheet/types";
 import {
@@ -88,6 +98,14 @@ const IDENTITY_SOURCE_LABEL: Record<IdentitySource, string> = {
   llm: "LLM 추정",
 };
 
+// 목표 등급 헬퍼에 필요한 문맥 (배치 4, P-4). 등급은 다른 학생들의 점수에 상대적이므로
+// 셀 하나만으로는 계산할 수 없다 — 표 전체의 반영 점수를 함께 넘긴다.
+type GradeContext = {
+  scheme: GradingScheme;
+  tieBreak: TieBreak;
+  allScores: { studentId: string; score: number | null }[];
+};
+
 // 빈 값 셀 클릭 시 이동할 페이즈 앵커. 앵커 요소가 아직 없으면(대시보드 개편 배치 5 전) 무동작.
 function scrollToAnchor(id: string) {
   if (typeof document === "undefined") return;
@@ -110,6 +128,8 @@ export function WorksheetTable({
   initialRows,
   initialLayout,
   unassignedCount,
+  gradingScheme,
+  tieBreak,
 }: {
   projectId: string;
   projectName: string;
@@ -118,6 +138,9 @@ export function WorksheetTable({
   initialLayout: unknown;
   /** 표에 보이지 않는(학생 미귀속) 제출물 수 — 배너용 (배치 3, P-2). */
   unassignedCount?: UnassignedCount;
+  /** 목표 등급 → 보정 점수 계산용 (배치 4, P-4). 미전달이면 목표 등급 UI를 숨긴다. */
+  gradingScheme?: GradingScheme;
+  tieBreak?: TieBreak;
 }) {
   const [rows, setRows] = useState<WorksheetRow[]>(initialRows);
   const [layout, setLayout] = useState<WorksheetLayout>(() =>
@@ -232,6 +255,16 @@ export function WorksheetTable({
       index,
     }));
   }, [expandedStudent]);
+
+  // 목표 등급 계산 문맥 — 표 전체의 반영 점수를 모아 둔다(추가 조회 없음).
+  const gradeCtx = useMemo<GradeContext | null>(() => {
+    if (!gradingScheme || !tieBreak) return null;
+    return {
+      scheme: gradingScheme,
+      tieBreak,
+      allScores: rows.map((r) => ({ studentId: r.studentId, score: r.displayScore })),
+    };
+  }, [gradingScheme, tieBreak, rows]);
 
   // [학생 이동] 대상 목록 — 이미 조회한 rows에서 조립한다(추가 조회 불필요).
   const studentOptions = useMemo(
@@ -717,6 +750,7 @@ export function WorksheetTable({
                   expandedCols={expandedCols}
                   expandedCells={expandedCells}
                   setExpandedCells={setExpandedCells}
+                  gradeCtx={gradeCtx}
                 />
               ))
             )}
@@ -967,6 +1001,7 @@ function WorksheetRowView({
   expandedCols,
   expandedCells,
   setExpandedCells,
+  gradeCtx,
 }: {
   projectId: string;
   countMethod: CountMethod;
@@ -991,6 +1026,7 @@ function WorksheetRowView({
   }[];
   expandedCells: Set<string>;
   setExpandedCells: React.Dispatch<React.SetStateAction<Set<string>>>;
+  gradeCtx: GradeContext | null;
 }) {
   return (
     <>
@@ -1032,6 +1068,7 @@ function WorksheetRowView({
                 expandedCols={expandedCols}
                 expandedCells={expandedCells}
                 setExpandedCells={setExpandedCells}
+                gradeCtx={gradeCtx}
               />
             </td>
           );
@@ -1055,6 +1092,7 @@ function Cell({
   expandedCols,
   expandedCells,
   setExpandedCells,
+  gradeCtx,
 }: {
   projectId: string;
   countMethod: CountMethod;
@@ -1076,6 +1114,7 @@ function Cell({
   }[];
   expandedCells: Set<string>;
   setExpandedCells: React.Dispatch<React.SetStateAction<Set<string>>>;
+  gradeCtx: GradeContext | null;
 }) {
   if (columnKey.startsWith("sub_detail_")) {
     const ec = expandedCols.find((c) => c.key === columnKey);
@@ -1102,15 +1141,23 @@ function Cell({
     };
 
     return (
-      <div 
-        onClick={toggleCell}
-        className={isExpandedStudent ? "" : "cursor-pointer"}
-        title={isExpandedStudent ? undefined : "클릭하여 펼치기/접기"}
-      >
-        <TextCell
-          text={targetSub.contentText}
-          collapsed={!isCellExpanded}
-          rowHeight={rowHeight}
+      <div className="flex flex-col gap-2">
+        <div
+          onClick={toggleCell}
+          className={isExpandedStudent ? "" : "cursor-pointer"}
+          title={isExpandedStudent ? undefined : "클릭하여 펼치기/접기"}
+        >
+          <TextCell
+            text={targetSub.contentText}
+            collapsed={!isCellExpanded}
+            rowHeight={rowHeight}
+          />
+        </div>
+        {/* 기준별 채점 결과·교사 수정 (배치 4, P-3) */}
+        <EvaluationBlock
+          projectId={projectId}
+          submissionId={targetSub.id}
+          evaluation={targetSub.evaluation}
         />
       </div>
     );
@@ -1191,7 +1238,7 @@ function Cell({
         </button>
       );
     case "score":
-      return <ScoreCell projectId={projectId} row={row} />;
+      return <ScoreCell projectId={projectId} row={row} gradeCtx={gradeCtx} />;
     case "grade":
       return row.grade !== null ? (
         <span className="font-semibold">{row.grade}등급</span>
@@ -1236,18 +1283,246 @@ function EmptyCellButton({ anchor, label }: { anchor: string; label: string }) {
 }
 
 // ── 반영 점수 셀(오버라이드 인라인 편집) ──────────────────────────────────
-function ScoreCell({ projectId, row }: { projectId: string; row: WorksheetRow }) {
+// ── 기준별 채점 결과 표시·수정 (리팩토링 4 배치 4, P-3) ────────────────────
+// 채점 결과를 볼 수 있는 화면이 어디에도 없던 것이 "채점이 숨어 있다"의 원인이었다.
+// 여기서 바로 고치면 점수→순위→등급이 서버에서 즉시 재파생된다(등급 입력란은 없다 — INV-6).
+function EvaluationBlock({
+  projectId,
+  submissionId,
+  evaluation,
+}: {
+  projectId: string;
+  submissionId: string;
+  evaluation: WorksheetEvaluation | null;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  if (!evaluation) {
+    return (
+      <div className="border-t border-zinc-200 pt-1 text-[11px] text-zinc-400 dark:border-zinc-800">
+        미채점 —{" "}
+        <button
+          type="button"
+          onClick={() => scrollToAnchor("phase-2")}
+          className="underline underline-offset-2 hover:text-zinc-600 dark:hover:text-zinc-200"
+        >
+          채점 실행
+        </button>
+      </div>
+    );
+  }
+
+  function startEdit() {
+    if (!evaluation) return;
+    const next: Record<string, string> = {};
+    for (const s of evaluation.scores) next[s.criterionId] = String(s.score);
+    setValues(next);
+    setErr(null);
+    setDone(null);
+    setEditing(true);
+  }
+
+  async function save() {
+    if (!evaluation) return;
+    setBusy(true);
+    setErr(null);
+    setDone(null);
+    try {
+      const scores = evaluation.scores.map((s) => ({
+        criterion_id: s.criterionId,
+        score: Number(values[s.criterionId]),
+      }));
+      const result = await saveEvaluationEdit(projectId, submissionId, scores);
+      setEditing(false);
+      // 서버가 순위·등급까지 다시 파생했음을 알린다(P-3의 "즉시 반영"이 눈에 보이게).
+      setDone(
+        result.pendingConfirm
+          ? `저장됨 · 표시 점수 확정 대기(${result.pendingConfirm.scored}/${result.pendingConfirm.required}명)`
+          : `저장됨 · 재계산 완료(${result.ranked}명)`,
+      );
+      emitWorksheetRefresh();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rescore() {
+    setBusy(true);
+    setErr(null);
+    setDone(null);
+    try {
+      const r = await rescoreOne(projectId, submissionId);
+      if (!r.ok) {
+        setErr(r.message);
+        return;
+      }
+      setDone(`AI 재채점 · ${r.message}`);
+      emitWorksheetRefresh();
+    } catch (e) {
+      setErr(errMsg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const maxTotal = evaluation.scores.reduce((a, s) => a + s.max, 0);
+
+  return (
+    <div className="flex flex-col gap-1 border-t border-zinc-200 pt-1 text-[11px] dark:border-zinc-800">
+      <div className="flex flex-wrap items-center gap-1">
+        <span className="font-medium text-zinc-600 dark:text-zinc-300">
+          채점 {evaluation.total}
+          {maxTotal > 0 ? `/${maxTotal}` : ""}
+        </span>
+        <span
+          className={`rounded px-1 py-0.5 text-[10px] ${
+            evaluation.origin === "teacher"
+              ? "border border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300"
+              : "border border-zinc-300 bg-white text-zinc-500 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-400"
+          }`}
+        >
+          {evaluation.origin === "teacher" ? "교사 수정" : "AI"}
+        </span>
+      </div>
+
+      {editing ? (
+        <div className="flex flex-col gap-1">
+          {evaluation.scores.map((s) => (
+            <label key={s.criterionId} className="flex items-center gap-1">
+              <span className="flex-1 truncate text-zinc-600 dark:text-zinc-300" title={s.name}>
+                {s.name}
+              </span>
+              <input
+                type="number"
+                min={0}
+                max={s.max}
+                step={1}
+                value={values[s.criterionId] ?? ""}
+                onChange={(e) =>
+                  setValues((prev) => ({ ...prev, [s.criterionId]: e.target.value }))
+                }
+                aria-label={`${s.name} 점수(0~${s.max})`}
+                className="w-14 rounded border border-zinc-300 bg-white px-1 py-0.5 text-right dark:border-zinc-700 dark:bg-zinc-900"
+              />
+              <span className="text-zinc-400">/{s.max}</span>
+            </label>
+          ))}
+          <div className="flex flex-wrap gap-1">
+            <button
+              type="button"
+              onClick={save}
+              disabled={busy}
+              className="rounded bg-zinc-800 px-2 py-0.5 font-medium text-white hover:bg-zinc-700 disabled:opacity-50 dark:bg-zinc-200 dark:text-zinc-900"
+            >
+              저장
+            </button>
+            <button
+              type="button"
+              onClick={() => setEditing(false)}
+              disabled={busy}
+              className="rounded px-2 py-0.5 text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200"
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <ul className="flex flex-col gap-0.5">
+            {evaluation.scores.map((s) => (
+              <li
+                key={s.criterionId}
+                className="flex items-center gap-1 text-zinc-600 dark:text-zinc-300"
+                // 근거 인용은 접어 두고 hover로 보여 준다(셀이 좁다).
+                title={s.evidence ? `근거: ${s.evidence}` : "근거 인용 없음"}
+              >
+                <span className="flex-1 truncate">{s.name}</span>
+                <span className="tabular-nums">
+                  {s.score}/{s.max}
+                </span>
+                {s.evidence && <span className="text-zinc-400">💬</span>}
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap gap-1">
+            <button
+              type="button"
+              onClick={startEdit}
+              disabled={busy}
+              className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              점수 수정
+            </button>
+            <button
+              type="button"
+              onClick={rescore}
+              disabled={busy}
+              title="이 제출물만 AI로 다시 채점합니다(교사 수정본은 대체됩니다)"
+              className="rounded border border-zinc-300 px-2 py-0.5 text-zinc-600 hover:bg-zinc-50 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              {busy ? "처리 중…" : "AI 재채점"}
+            </button>
+          </div>
+        </>
+      )}
+
+      {done && <p className="text-green-700 dark:text-green-400">{done}</p>}
+      {err && <p className="text-red-500">{err}</p>}
+    </div>
+  );
+}
+
+function ScoreCell({
+  projectId,
+  row,
+  gradeCtx,
+}: {
+  projectId: string;
+  row: WorksheetRow;
+  gradeCtx: GradeContext | null;
+}) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [targetGrade, setTargetGrade] = useState("");
+  const [gradeHint, setGradeHint] = useState<string | null>(null);
 
   function startEdit() {
     setValue(String(row.displayScore ?? ""));
     setReason(row.overrideReason ?? "");
     setErr(null);
+    setTargetGrade("");
+    setGradeHint(null);
     setEditing(true);
+  }
+
+  // 목표 등급 → 보정 점수 구간. **등급을 저장하는 것이 아니라 점수를 계산해 채워 줄 뿐이다**
+  // (INV-6: 등급은 여전히 점수에서 파생된다).
+  function applyTargetGrade(gradeStr: string) {
+    setTargetGrade(gradeStr);
+    if (!gradeCtx || !gradeStr) {
+      setGradeHint(null);
+      return;
+    }
+    const target = Number(gradeStr);
+    const others = gradeCtx.allScores
+      .filter((s) => s.studentId !== row.studentId && s.score !== null)
+      .map((s) => s.score as number);
+    const range = overrideRangeForGrade(others, gradeCtx.scheme, gradeCtx.tieBreak, target);
+    if (!range) {
+      setGradeHint(`${target}등급은 현재 인원 기준 불가`);
+      return;
+    }
+    setGradeHint(`${target}등급이 되는 보정 점수: ${range.min}~${range.max}`);
+    setValue(String(range.min));
   }
 
   async function save() {
@@ -1318,6 +1593,27 @@ function ScoreCell({ projectId, row }: { projectId: string; row: WorksheetRow })
         aria-label="보정 점수(0~999)"
         className="w-20 rounded border border-zinc-300 bg-white px-2 py-1 text-sm dark:border-zinc-700 dark:bg-zinc-900"
       />
+      {gradeCtx && (
+        <div className="flex flex-col gap-1">
+          <select
+            value={targetGrade}
+            onChange={(e) => applyTargetGrade(e.target.value)}
+            aria-label="목표 등급"
+            title="목표 등급을 고르면 그 등급이 되는 보정 점수를 계산해 채워 줍니다"
+            className="w-full rounded border border-zinc-300 bg-white px-2 py-1 text-xs dark:border-zinc-700 dark:bg-zinc-900"
+          >
+            <option value="">목표 등급으로 점수 계산…</option>
+            {GRADE_BOUNDARIES[gradeCtx.scheme].map((_, i) => (
+              <option key={i + 1} value={i + 1}>
+                {i + 1}등급
+              </option>
+            ))}
+          </select>
+          {gradeHint && (
+            <span className="text-[11px] text-zinc-500 dark:text-zinc-400">{gradeHint}</span>
+          )}
+        </div>
+      )}
       <input
         type="text"
         value={reason}

@@ -61,6 +61,7 @@ export default async function ProjectHomePage({
     suspectRes,
     unassignedUnmatchedRes,
     unassignedPendingRes,
+    wsEvals,
   ] = await Promise.all([
     supabase
       .from("students")
@@ -124,6 +125,12 @@ export default async function ProjectHomePage({
       .eq("project_id", id)
       .is("student_id", null)
       .in("match_status", ["pending_confirm", "update_pending"]),
+    // 작업결과표 제출물 펼침의 기준별 채점 결과(배치 4). 소유자 select 허용(쓰기만 service role).
+    supabase
+      .from("evaluations")
+      .select("submission_id, scores, total_score, origin")
+      .eq("project_id", id)
+      .eq("is_current", true),
   ]);
 
   const worksheetRows = assembleWorksheetRows({
@@ -131,6 +138,8 @@ export default async function ProjectHomePage({
     submissions: wsSubs.data ?? [],
     scores: wsScores.data ?? [],
     records: wsRecords.data ?? [],
+    evaluations: wsEvals.data ?? [],
+    criteria: (rubricRes.data?.criteria ?? []) as RubricCriterion[],
   });
 
   const pendingCount = pendingRes.count ?? 0;
@@ -308,6 +317,8 @@ export default async function ProjectHomePage({
             initialRows={worksheetRows}
             initialLayout={wsLayout.data?.layout ?? null}
             unassignedCount={unassignedCount}
+            gradingScheme={project.grading_scheme}
+            tieBreak={project.tie_break}
           />
         </div>
       </section>

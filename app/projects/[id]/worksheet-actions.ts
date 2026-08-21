@@ -5,13 +5,15 @@ import { normalizeWorksheetLayout } from "@/lib/worksheet/layout";
 import { assembleWorksheetRows } from "@/lib/worksheet/assemble";
 import type { WorksheetRow } from "@/lib/worksheet/types";
 import type { UnassignedCount } from "@/lib/worksheet/unassigned";
+import type { RubricCriterion } from "@/lib/supabase/types";
 
 // 작업결과표 행 조립(배치 3). requireProjectOwner 후 owner 클라이언트(RLS)로 4쿼리 →
 // 순수 assembleWorksheetRows로 학생 기준 left-join 조립. 페이지도 같은 조립 함수를 쓴다.
 export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRow[]> {
   const { supabase } = await requireProjectOwner(projectId);
 
-  const [studentsRes, subsRes, scoresRes, recordsRes] = await Promise.all([
+  const [studentsRes, subsRes, scoresRes, recordsRes, evalsRes, rubricRes] =
+    await Promise.all([
     supabase
       .from("students")
       .select("id, student_number, name, teacher_memo, score_override, override_reason")
@@ -31,6 +33,13 @@ export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRo
       .select("student_id, content, version")
       .eq("project_id", projectId)
       .eq("is_current", true),
+    // 현재 채점 결과 — evaluations는 소유자 select가 허용된다(쓰기만 service role 전용).
+    supabase
+      .from("evaluations")
+      .select("submission_id, scores, total_score, origin")
+      .eq("project_id", projectId)
+      .eq("is_current", true),
+    supabase.from("rubrics").select("criteria").eq("project_id", projectId).maybeSingle(),
   ]);
 
   return assembleWorksheetRows({
@@ -38,6 +47,8 @@ export async function fetchWorksheetRows(projectId: string): Promise<WorksheetRo
     submissions: (subsRes.data as any) ?? [],
     scores: scoresRes.data ?? [],
     records: recordsRes.data ?? [],
+    evaluations: evalsRes.data ?? [],
+    criteria: (rubricRes.data?.criteria ?? []) as RubricCriterion[],
   });
 }
 

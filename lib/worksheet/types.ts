@@ -3,6 +3,7 @@
 
 import type {
   AuthenticityStatus,
+  EvaluationOrigin,
   IdentitySource,
   MatchMethod,
 } from "@/lib/supabase/types";
@@ -45,6 +46,22 @@ export type WorksheetSubmission = {
   factsheetTitle: string | null;
   matchMethod: MatchMethod | null; // 귀속 경로 배지용
   identitySource: IdentitySource | null; // 식별값 출처 배지용(LLM 유래는 강조)
+  evaluation: WorksheetEvaluation | null; // 현재 채점 결과(미채점이면 null) — 배치 4
+};
+
+// 제출물 펼침에 표시·수정하는 기준별 채점 결과 (리팩토링 4 배치 4, P-3).
+// 기준 목록은 **루브릭 순서**로 조립한다 — 편집기가 보내는 값이 루브릭과 정확히 일치해야
+// 서버 검증(validateTeacherScores)을 통과하기 때문이다.
+export type WorksheetEvaluation = {
+  total: number; // 저장된 total_score(합계의 진실 원천)
+  origin: EvaluationOrigin; // 'llm' | 'teacher'
+  scores: {
+    criterionId: string;
+    name: string;
+    score: number;
+    max: number;
+    evidence: string;
+  }[];
 };
 
 export type WorksheetRow = {

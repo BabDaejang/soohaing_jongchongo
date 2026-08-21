@@ -12,7 +12,9 @@ import { writeAuditLog } from "@/lib/audit";
 import {
   aggregateComposite,
   submissionScore,
+  validateTeacherScores,
   type CriterionScore,
+  type TeacherScoreInput,
 } from "@/lib/scoring";
 import { computeStandings } from "@/lib/grading";
 import { assignDisplayScores, initialConfirmCount } from "@/lib/scores/display";
@@ -361,9 +363,19 @@ export async function prepareEvaluation(
 
 // 제출물 1건 채점(터미널이 반복 호출). 에러는 버리지 않고 message로 돌려준다.
 // 클라이언트 입력은 id뿐 — 루브릭·라우팅은 서버가 DB에서 재조립한다(INV-2).
+// 동작·시그니처 불변: 실제 구현은 아래 공용 코어(force=false)에 위임한다(배치 4).
 export async function evaluateOne(
   projectId: string,
   submissionId: string,
+): Promise<{ ok: boolean; message: string; retryable?: boolean }> {
+  return scoreSubmissionByAI(projectId, submissionId, false);
+}
+
+// AI 채점 공용 코어 — 일괄 채점(force=false, 증분 스킵)과 강제 재채점(force=true)이 공유한다.
+async function scoreSubmissionByAI(
+  projectId: string,
+  submissionId: string,
+  force: boolean,
 ): Promise<{ ok: boolean; message: string; retryable?: boolean }> {
   const { userId, supabase } = await requireProjectOwner(projectId);
   const admin = createAdminClient();
@@ -405,15 +417,17 @@ export async function evaluateOne(
   }
 
   // 동시 탭 방어: 채점 직전 현재 평가 해시를 재확인 — 같으면 이미 채점됨(증분).
+  // 강제 재채점(force)은 이 스킵을 건너뛴다 — 교사가 특정 1건을 AI로 되돌리는 경로.
   const { data: current } = await admin
     .from("evaluations")
-    .select("content_hash")
+    .select("content_hash, origin")
     .eq("submission_id", submissionId)
     .eq("is_current", true)
     .maybeSingle();
-  if (current && current.content_hash === sub.content_hash) {
+  if (!force && current && current.content_hash === sub.content_hash) {
     return { ok: true, message: "이미 채점됨(증분)" };
   }
+  const replacedTeacherEdit = force && current?.origin === "teacher";
 
   // temperature 0으로 결정성 요청 — gpt-5 계열은 배치 1 어댑터가 temperature를 자동 생략한다.
   let text: string;
@@ -461,13 +475,15 @@ export async function evaluateOne(
     content_hash: sub.content_hash,
     raw_llm_output: text,
     model,
+    origin: "llm", // 기본값과 같지만 의도를 코드에 남긴다(배치 4)
     is_current: true,
   });
   if (insErr) {
     return { ok: false, message: `평가 저장 실패: ${insErr.message}`.slice(0, 300) };
   }
 
-  return { ok: true, message: `원점수 ${total}점` };
+  const note = replacedTeacherEdit ? " · 교사 수정본을 AI 채점으로 대체함" : "";
+  return { ok: true, message: `원점수 ${total}점${note}` };
 }
 
 // 실행 종료 후 1회: 합성·순위·등급 재계산 → 감사 로그 → revalidate.
@@ -1355,6 +1371,144 @@ async function saveAuthenticity(
     .eq("project_id", projectId);
   if (error) return { ok: false, message: error.message };
   return { ok: true };
+}
+
+// ── 평가 교사 수정·강제 재채점 (리팩토링 4 배치 4, P-3) ───────────────────
+//
+// 교사 수정은 update가 아니라 **origin='teacher' 새 행 insert**다(records의 'edited' 패턴).
+// LLM 원본 행은 이력에 그대로 남고, 쓰기는 여전히 service role뿐이다 — RLS 정책은 손대지
+// 않았으므로 클라이언트가 evaluations에 직접 쓸 길은 없다(위조 차단 유지).
+
+// 수정 대상 제출물이 채점 자격을 갖췄는지 확인하고 현재 평가·해시를 함께 돌려준다.
+async function loadEditableSubmission(
+  supabase: Client,
+  admin: Admin,
+  projectId: string,
+  submissionId: string,
+) {
+  const { data: sub } = await supabase
+    .from("submissions")
+    .select("id, content_hash, include_in_eval, student_id, match_status")
+    .eq("id", submissionId)
+    .eq("project_id", projectId)
+    .maybeSingle();
+  if (!sub || !sub.student_id || !MATCHED_STATUSES.includes(sub.match_status)) {
+    throw new Error("채점 대상이 아닌 제출물입니다(학생 귀속·매칭 확정 필요).");
+  }
+
+  const { data: current } = await admin
+    .from("evaluations")
+    .select("id, scores, total_score, origin")
+    .eq("submission_id", submissionId)
+    .eq("is_current", true)
+    .maybeSingle();
+
+  return { sub, current };
+}
+
+// 기준별 점수를 교사 값으로 저장하고 즉시 재계산한다(점수→순위→등급 파생 — P-3).
+export async function saveEvaluationEdit(
+  projectId: string,
+  submissionId: string,
+  scores: TeacherScoreInput[],
+): Promise<RecomputeResult> {
+  const { userId, supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+
+  const { data: rubric } = await supabase
+    .from("rubrics")
+    .select("criteria")
+    .eq("project_id", projectId)
+    .maybeSingle();
+  const criteria = (rubric?.criteria ?? []) as RubricCriterion[];
+
+  // 검증 실패는 조용히 보정하지 않고 거부한다(교사 입력은 명시적이어야 한다).
+  const validated = validateTeacherScores(scores, criteria);
+  if (!validated.ok) throw new Error(validated.error);
+
+  const { sub, current } = await loadEditableSubmission(
+    supabase,
+    admin,
+    projectId,
+    submissionId,
+  );
+
+  // 근거 인용은 교사가 다시 쓰게 하지 않고 현재 평가의 값을 승계한다(없으면 빈 문자열).
+  const evidenceById = new Map<string, string>();
+  for (const s of current?.scores ?? []) {
+    evidenceById.set(s.criterion_id, s.evidence_quote ?? "");
+  }
+  const nextScores: EvaluationCriterionScore[] = validated.scores.map((s) => ({
+    criterion_id: s.criterion_id,
+    score: s.score,
+    evidence_quote: evidenceById.get(s.criterion_id) ?? "",
+  }));
+  const total = nextScores.reduce((acc, s) => acc + s.score, 0);
+
+  // 바뀐 기준 수(감사 로그용) — 점수 원문·인용은 남기지 않는다.
+  const changed = current
+    ? nextScores.filter((s) => {
+        const before = current.scores.find((c) => c.criterion_id === s.criterion_id);
+        return !before || before.score !== s.score;
+      }).length
+    : nextScores.length;
+
+  // partial unique(submission_id where is_current) 충돌 방지: 이전 현재 평가를 먼저 내린다.
+  if (current) {
+    await admin
+      .from("evaluations")
+      .update({ is_current: false })
+      .eq("submission_id", submissionId)
+      .eq("is_current", true);
+  }
+  const { error: insErr } = await admin.from("evaluations").insert({
+    submission_id: submissionId,
+    project_id: projectId,
+    scores: nextScores,
+    total_score: total,
+    // 제출물의 **현재** 해시를 그대로 쓴다 → 내용이 그대로인 한 일괄 채점의 증분 판정이
+    // 이 행을 건너뛰므로 교사 수정이 AI에 덮이지 않는다(DATA_MODEL 9절).
+    content_hash: sub.content_hash,
+    raw_llm_output: null,
+    model: null,
+    origin: "teacher",
+    is_current: true,
+  });
+  if (insErr) throw new Error(`평가 저장 실패: ${insErr.message}`.slice(0, 300));
+
+  await writeAuditLog({
+    actorId: userId,
+    action: "evaluation.teacher_edit",
+    entity: "evaluations",
+    entityId: submissionId,
+    detail: {
+      project_id: projectId,
+      before_total: current?.total_score ?? null,
+      after_total: total,
+      changed_criteria: changed,
+      replaced_origin: current?.origin ?? null,
+    },
+  });
+
+  // 수정 즉시 점수→순위→등급을 다시 파생한다(INV-6: 등급은 여전히 계산 결과일 뿐).
+  const result = await recomputeAndSave(projectId, supabase, admin);
+  revalidatePath(`/projects/${projectId}`);
+  return result;
+}
+
+// 제출물 1건을 증분 판정과 무관하게 AI로 다시 채점한다(교사 수정본을 되돌리는 경로).
+export async function rescoreOne(
+  projectId: string,
+  submissionId: string,
+): Promise<{ ok: boolean; message: string; retryable?: boolean }> {
+  const r = await scoreSubmissionByAI(projectId, submissionId, true);
+  if (!r.ok) return r;
+
+  const { supabase } = await requireProjectOwner(projectId);
+  const admin = createAdminClient();
+  await recomputeAndSave(projectId, supabase, admin);
+  revalidatePath(`/projects/${projectId}`);
+  return { ok: true, message: `${r.message} · 재계산 완료` };
 }
 
 // ── 재계산만(재채점 없이 합성·표시 점수·순위·등급) ──────────────────────
